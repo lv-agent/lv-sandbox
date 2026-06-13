@@ -73,7 +73,7 @@ Each task runs in its own process group, layered with six isolation mechanisms:
 
 | Mechanism | Effect |
 |---|---|
-| **Landlock** | restricts filesystem access — a task can only read/write its own workspace |
+| **Landlock** | restricts filesystem access — a task can only read/write its own workspace; **/proc is scoped** to its own `/proc/self` + global info (cpuinfo/meminfo), not other tasks' `/proc/<pid>` |
 | **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, …) **and all network socket syscalls — default no-network: tasks cannot make outbound connections, listen, or send/receive traffic** |
 | **rlimit** | caps process-level resources (CPU, file count, process count, file size) |
 | **cgroup v2** | caps real task resource use (memory, CPU, pids); degrades gracefully if unavailable |
@@ -98,6 +98,7 @@ refuse execution (fail-closed) or degrade and continue (fail-open).
 - Spawning background processes to escape timeouts (whole-group cleanup)
 - Calling dangerous syscalls
 - **Making network connections** — all network socket syscalls are blocked by default (seccomp); tasks cannot phone home, reach the cloud metadata service (169.254.169.254), or open listeners
+- **Snooping other tasks via /proc** — /proc is scoped: a task can only read its own `/proc/self` + global info (cpuinfo/meminfo), not other tasks' `/proc/<pid>` (cmdline/maps/environ)
 - Inheriting the runner's secret env vars or leaked fds
 
 ### What it does NOT fully stop

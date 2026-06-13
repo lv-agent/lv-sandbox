@@ -159,7 +159,7 @@ impl PreparedSandboxContext {
     /// 执行顺序：setsid → NoNewPrivs → landlock → seccomp → rlimit → chdir → close_fds
     /// 关键：landlock/seccomp 需要创建内部 fd，必须在 rlimit 限制 nofile 之前完成。
     /// close_fds 放最后：此时所有内部 fd 已使用完毕。
-    pub fn apply_in_child(&self, workspace: &Path, error_pipe_fd: RawFd) {
+    pub fn apply_in_child(&mut self, workspace: &Path, error_pipe_fd: RawFd) {
         let report_error = |code: PreExecError| {
             let buf = [code.as_byte()];
             unsafe {
@@ -178,8 +178,8 @@ impl PreparedSandboxContext {
             report_error(PreExecError::NoNewPrivs);
         }
 
-        // landlock（需要内部 fd，必须在 rlimit 之前）
-        if let Some(ref landlock) = self.landlock {
+        // landlock（需要内部 fd，必须在 rlimit 之前；apply 会 take inner + 动态放行 /proc/<pid>）
+        if let Some(ref mut landlock) = self.landlock {
             if landlock.apply().is_err() {
                 report_error(PreExecError::LandlockApply);
             }

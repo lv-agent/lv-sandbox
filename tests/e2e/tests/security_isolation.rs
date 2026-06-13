@@ -150,3 +150,71 @@ async fn 默认禁网_联网任务被阻止() {
         result.signal
     );
 }
+
+// ==================== cr-017: proc 信息边界收紧 ====================
+// 直接 exec cat/ls（不经 sh fork），保证读 /proc/self 的进程 pid == 动态放行的 pid
+
+/// cr-017: 任务能读自己的 /proc/self（pre_exec 动态放行 /proc/<pid>）
+#[tokio::test]
+async fn proc收紧_任务能读自己的proc_self() {
+    let (_tmp, runner) = create_test_runner().await;
+    let req = make_job_request("proc-self-001", &["/bin/cat", "/proc/self/status"]);
+    let result = runner.run_job(req).await.expect("执行失败");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout.contains("Name:"),
+        "应能读 /proc/self/status（动态放行），stdout: {stdout}"
+    );
+}
+
+/// cr-017: 任务读不到别的 pid 的 /proc（/proc/1 = init，必然存在且非自己）
+#[tokio::test]
+async fn proc收紧_任务读不到别的pid的proc() {
+    let (_tmp, runner) = create_test_runner().await;
+    let req = make_job_request("proc-other-001", &["/bin/cat", "/proc/1/status"]);
+    let result = runner.run_job(req).await.expect("执行失败");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        !stdout.contains("Name:"),
+        "不应读到 /proc/1/status（别的 pid 被堵），stdout: {stdout}"
+    );
+    assert_ne!(
+        result.exit_code,
+        Some(0),
+        "读 /proc/1 应失败（非 0 退出），exit_code: {:?}",
+        result.exit_code
+    );
+}
+
+/// cr-017: 全局 /proc/cpuinfo 仍可读（白名单）
+#[tokio::test]
+async fn proc收紧_全局cpuinfo可读() {
+    let (_tmp, runner) = create_test_runner().await;
+    let req = make_job_request("proc-cpu-001", &["/bin/cat", "/proc/cpuinfo"]);
+    let result = runner.run_job(req).await.expect("执行失败");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout.contains("processor"),
+        "应能读 /proc/cpuinfo（全局白名单），stdout 前 200: {}",
+        &stdout[..stdout.len().min(200)]
+    );
+}
+
+/// cr-017: 任务不能 ls /proc（列全部 pid，信息泄露面）
+#[tokio::test]
+async fn proc收紧_不能列出proc根() {
+    let (_tmp, runner) = create_test_runner().await;
+    let req = make_job_request("proc-ls-001", &["/bin/ls", "/proc"]);
+    let result = runner.run_job(req).await.expect("执行失败");
+
+    assert_ne!(
+        result.exit_code,
+        Some(0),
+        "ls /proc 应被拒（非 0 退出），exit_code: {:?}, stdout: {:?}",
+        result.exit_code,
+        String::from_utf8_lossy(&result.stdout)
+    );
+}

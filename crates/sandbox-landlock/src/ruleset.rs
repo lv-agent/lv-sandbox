@@ -15,6 +15,8 @@ use crate::LandlockCapabilities;
 #[derive(Debug)]
 pub struct PreparedRuleset {
     inner: Option<RulesetCreated>,
+    /// cr-017: apply 动态构造 /proc/<pid> 规则的 access 需要 abi
+    abi: ABI,
 }
 
 impl PreparedRuleset {
@@ -66,25 +68,39 @@ impl PreparedRuleset {
                 .map_err(|e| LandlockError::RuleAdd(format!("{e}")))?;
         }
 
-        Ok(Self { inner: Some(created) })
+        Ok(Self {
+            inner: Some(created),
+            abi,
+        })
     }
 
-    /// 应用 Landlock 策略到当前进程。
-    /// 必须在 pre_exec 闭包中调用（fork 后、exec 前）。
-    /// 内部 `take()` 出 RulesetCreated 并消耗它调用 `restrict_self()`。
-    pub fn apply(&self) -> Result<(), LandlockError> {
-        let created = self
+    /// 应用 Landlock 策略到当前进程。必须在 pre_exec（fork 后、exec 前）调用。
+    ///
+    /// cr-017: 先动态放行 `/proc/<自己的 pid>`，再 restrict_self。pre_exec 信号安全
+    /// 已由 examples/proc_preexec.rs 验证（format! + PathFd + add_rule + restrict_self）。
+    pub fn apply(&mut self) -> Result<(), LandlockError> {
+        let mut created = self
             .inner
-            .as_ref()
+            .take()
             .ok_or_else(|| LandlockError::RestrictSelf("ruleset 已被消费".into()))?;
 
-        // restrict_self 消费 RulesetCreated，但我们需要 &self 签名
-        // 所以用 try_clone() 获取独立副本
-        let cloned = created
-            .try_clone()
-            .map_err(|e| LandlockError::RestrictSelf(format!("clone 失败: {e}")))?;
+        // cr-017: 动态放行 /proc/<自己的 pid>（pre_exec 时 getpid = exec 进程的 pid）
+        let pid = unsafe { libc::getpid() };
+        let self_proc = format!("/proc/{pid}");
+        match PathFd::new(&self_proc) {
+            Ok(fd) => {
+                let read = AccessFs::from_read(self.abi);
+                created = created
+                    .add_rule(PathBeneath::new(fd, read))
+                    .map_err(|e| LandlockError::RuleAdd(format!("动态 /proc/<pid>: {e}")))?;
+            }
+            Err(e) => {
+                // 降级：打不开 /proc/<pid>（罕见）则不放行 self，任务读 /proc/self 会失败但不崩溃
+                tracing::warn!(path = %self_proc, error = %e, "动态放行 /proc/<pid> 失败，降级");
+            }
+        }
 
-        cloned
+        created
             .restrict_self()
             .map_err(|e| LandlockError::RestrictSelf(format!("{e}")))?;
         Ok(())

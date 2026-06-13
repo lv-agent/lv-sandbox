@@ -124,7 +124,7 @@ fn prepared_ruleset_apply_在子进程中限制文件系统访问() {
         .expect("prepare 不应失败");
 
     // 在子进程中 apply landlock，然后尝试写 /tmp 外的文件
-    let prepared_clone = prepared;
+    let mut prepared_clone = prepared;
     let output = unsafe {
         Command::new("/bin/sh")
             .arg("-c")
@@ -171,7 +171,7 @@ fn prepared_ruleset_apply_阻止未授权路径的写入() {
         .expect("prepare 不应失败");
 
     // 子进程: apply landlock → 尝试在 /var/tmp 写文件（应被阻止）
-    let prepared_clone = prepared;
+    let mut prepared_clone = prepared;
     let output = unsafe {
         Command::new("/bin/sh")
             .arg("-c")
@@ -194,15 +194,24 @@ fn prepared_ruleset_apply_阻止未授权路径的写入() {
 }
 
 #[test]
-fn fspolicy_shell包含proc路径() {
+fn fspolicy_shell包含proc全局白名单() {
     let tmp = tempfile::tempdir().expect("创建临时目录失败");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
-    let proc_rule = policy.rules().iter().find(|r| r.path == Path::new("/proc"));
-    assert!(proc_rule.is_some(), "shell 策略应包含 /proc");
+    let paths: Vec<&Path> = policy.rules().iter().map(|r| r.path.as_path()).collect();
+    // cr-017: 不再放行 /proc 整树（避免跨任务 pid 泄露），改为全局白名单；
+    // /proc/self 由 PreparedRuleset::apply 动态放行
+    assert!(
+        !paths.iter().any(|p| *p == Path::new("/proc")),
+        "不应放行 /proc 整树"
+    );
+    assert!(
+        paths.iter().any(|p| *p == Path::new("/proc/cpuinfo")),
+        "应含 /proc/cpuinfo 全局白名单"
+    );
 }
 
 #[test]
-fn landlock允许读取proc() {
+fn landlock动态放行proc_self() {
     let caps = detect_capabilities();
 
     if !caps.supported {
@@ -216,12 +225,14 @@ fn landlock允许读取proc() {
     let prepared = PreparedRuleset::prepare(&policy, &caps)
         .expect("prepare 不应失败");
 
-    // 在子进程中读取 /proc/self/status 验证 landlock 允许 /proc 访问
-    let prepared_clone = prepared;
+    // cr-017: 直接 exec cat（不经 sh fork），cat pid = pre_exec 动态放行的 pid，
+    // 故 cat 能读自己的 /proc/self/status。
+    // 注意：sh -c "head /proc/self/status" 中 head 是 sh fork 的子进程（pid 不同），
+    // 其 /proc/self 未放行 → 会失败。这是「按 pid 动态放行」的固有限制（见 cr-017 风险章节）。
+    let mut prepared_clone = prepared;
     let output = unsafe {
-        Command::new("/bin/sh")
-            .arg("-c")
-            .arg("head -1 /proc/self/status")
+        Command::new("/bin/cat")
+            .arg("/proc/self/status")
             .pre_exec(move || {
                 prepared_clone.apply().expect("landlock apply 失败");
                 Ok(())
@@ -231,13 +242,9 @@ fn landlock允许读取proc() {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!("stdout: {:?}", stdout);
-    eprintln!("stderr: {:?}", String::from_utf8_lossy(&output.stderr));
-    eprintln!("status: {:?}", output.status.code());
     assert!(
         stdout.contains("Name:"),
-        "应能读取 /proc/self/status, 实际输出: {}",
-        stdout
+        "cr-017: 直接 exec 进程应能读 /proc/self/status（动态放行），实际: {stdout}"
     );
 }
 
@@ -260,5 +267,34 @@ fn prepared_ruleset_prepare_不支持时返回错误() {
     assert!(
         matches!(result.unwrap_err(), LandlockError::Unavailable(_)),
         "错误类型应为 Unavailable"
+    );
+}
+
+// ==================== cr-017: proc 信息边界收紧 ====================
+
+#[test]
+fn proc策略_不含_proc根_含全局白名单() {
+    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
+    let paths: Vec<&Path> = policy.rules().iter().map(|r| r.path.as_path()).collect();
+
+    // 不应放行 /proc 整树（PathBeneath 会放行全部子项 → 跨任务 pid 泄露）
+    assert!(
+        !paths.iter().any(|p| *p == Path::new("/proc")),
+        "不应放行 /proc 整树，实际 paths: {:?}",
+        paths
+    );
+    // 应含全局无害白名单项
+    assert!(
+        paths.iter().any(|p| *p == Path::new("/proc/cpuinfo")),
+        "应放行 /proc/cpuinfo"
+    );
+    assert!(
+        paths.iter().any(|p| *p == Path::new("/proc/meminfo")),
+        "应放行 /proc/meminfo"
+    );
+    assert!(
+        paths.iter().any(|p| *p == Path::new("/proc/stat")),
+        "应放行 /proc/stat"
     );
 }

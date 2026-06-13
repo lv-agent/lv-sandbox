@@ -109,6 +109,15 @@ fn etc_paths() -> Vec<&'static str> {
 }
 
 fn proc_paths() -> Vec<&'static str> {
-    // 注意：不能用 /proc/self，因为在 fork 后子进程的 /proc/self 指向不同的 /proc/<pid>
-    vec!["/proc"]
+    // cr-017: 不再放行整个 /proc（PathBeneath 整树放行 → 跨任务 pid 泄露）。
+    // 仅放行全局无害项；/proc/self 由 PreparedRuleset::apply 在 pre_exec 动态放行（见 ruleset.rs）。
+    vec![
+        "/proc/cpuinfo",
+        "/proc/meminfo",
+        "/proc/stat",
+        "/proc/version",
+        "/proc/filesystems",
+        "/proc/uptime",
+        "/proc/loadavg",
+    ]
 }
