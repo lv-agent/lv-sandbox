@@ -1,23 +1,53 @@
 # lv-sandbox
 
-> 轻量级 Agent 沙箱：在一个 worker 内并发运行大量受隔离的任务，而非一任务一容器。
+> A **safety-first execution sandbox for AI Agents** — run untrusted agent
+> commands with kernel-level isolation, without spinning up a container per task.
 
-为 AI Agent（Claude Code、Hermes-Agent 等）提供安全的命令执行环境。每个任务在独立进程组中运行，叠加 Landlock + seccomp + rlimit + cgroup 多重隔离。
+AI agents (Claude Code, Hermes-Agent, coding assistants, autonomous tool-users)
+need to execute shell commands, scripts and generated code on the host. Letting
+them do that directly is dangerous: one bad command can delete files, read
+secrets, fork-bomb the machine, or invoke privileged syscalls. **lv-sandbox is
+the guard rail** — every command runs inside a hardened Linux process group
+wrapped in six layers of kernel isolation (Landlock + seccomp + rlimit +
+cgroup v2 + process hardening + timeout reaping).
 
-## 特性
+The design bet: **one long-lived worker runs many concurrently-isolated tasks**,
+using kernel security primitives instead of a full container per task. Light,
+fast, high-concurrency — strong enough to contain agent mistakes and casual
+privilege-escalation attempts.
 
-- **六重安全隔离**：Landlock（文件系统）+ seccomp（syscall）+ rlimit（资源）+ cgroup v2（内存/CPU/pids）+ 进程隔离（NoNewPrivs/setsid/fd 清理/env 白名单）+ 超时清理
-- **并发执行**：一个 worker 同时跑上百个轻量任务，`Semaphore` 限流排队
-- **YAML 配置**：内置 `shell`/`python`/`node` profile，可自定义，支持热重载
-- **HTTP API**：提交任务、查询状态、列 profile、重载配置、Prometheus 指标
-- **MCP 集成**：`sandbox-mcp` 网关对接 Claude Code / Hermes-Agent
+## Why
 
-## 快速开始
+| Traditional | lv-sandbox |
+|---|---|
+| one task → one container (heavy) | one worker → many tasks, each kernel-isolated (light) |
 
-**Docker（推荐）**：
+Spinning up a container per command is slow and expensive when an agent fires off
+hundreds of small tasks. lv-sandbox isolates each task at the kernel level inside
+a single worker — fast cold-start, low overhead, high throughput.
+
+> Built for **agent mistakes and casual escape attempts**. For fully untrusted,
+> high-assurance code, use MicroVM / gVisor / Kata. See
+> [Security boundary](docs/architecture.md#security-boundary).
+
+## Features
+
+- **Six-layer isolation** — Landlock (filesystem) + seccomp (syscalls) + rlimit
+  (resources) + cgroup v2 (mem/CPU/pids) + process hardening (NoNewPrivs / setsid
+  / fd cleanup / env allowlist) + timeout reaping
+- **High concurrency** — one worker runs hundreds of lightweight tasks, bounded
+  by a `Semaphore`
+- **YAML profiles** — built-in `shell` / `python` / `node`, fully customisable,
+  hot-reloadable
+- **HTTP API** — submit, status, list profiles, reload, Prometheus metrics
+- **MCP integration** — `sandbox-mcp` gateway for Claude Code / Hermes-Agent
+
+## Quick start
+
+**Docker (recommended)**:
 
 ```bash
-# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.1.0 .）
+# Pull the published image (or build locally: docker build -t lv-sandbox:0.1.0 .)
 docker pull ghcr.io/lv-agent/lv-sandbox:v0.1.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
@@ -27,14 +57,14 @@ docker run -d --name sandbox -p 8080:8080 \
   ghcr.io/lv-agent/lv-sandbox:v0.1.0
 ```
 
-**或源码构建**（需 libseccomp-dev / libseccomp2）：
+**Or build from source** (needs `libseccomp-dev` / `libseccomp2`):
 
 ```bash
 cargo build --workspace --release
 ./target/release/sandbox-server
 ```
 
-执行一个任务：
+Run a task:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/submit \
@@ -42,10 +72,16 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
   -d '{"job_id":"demo-1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
 ```
 
-## 文档
+## Documentation
 
-- 📐 [架构设计思路](docs/architecture.md) — 为什么这样设计、高层架构、安全边界
-- 📖 [使用指南](docs/usage.md) — 构建、HTTP API、MCP 集成、配置参考
+- 📐 [Architecture](docs/architecture.md) — the design bet, layers, security boundary
+- 📖 [Usage guide](docs/usage.md) — build, HTTP API, MCP integration, config reference
+- 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md)
+
+## Requirements
+
+- Linux, host kernel ≥ 5.13 (Landlock)
+- Docker (the image ships everything else), or Rust 1.75+ for source builds
 
 ## License
 

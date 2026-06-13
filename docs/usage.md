@@ -1,38 +1,39 @@
-# 使用指南
+# Usage guide
 
-## 环境要求
+## Requirements
 
-- Linux，宿主内核 ≥ 5.13（Landlock 所需）
-- **Docker 部署**：仅需 Docker，镜像内置其余依赖
-- **源码构建**：Rust 1.75+、`libseccomp-dev`（编译）/ `libseccomp2`（运行）
-- 推荐以非 root 用户在容器内运行（见[架构文档 · 推荐部署](architecture.md#推荐部署)）
+- Linux, host kernel ≥ 5.13 (Landlock)
+- **Docker**: only Docker is needed — the image ships the rest
+- **Source build**: Rust 1.75+, `libseccomp-dev` (build) / `libseccomp2` (run)
+- Recommended to run as a non-root user inside a container (see [Architecture · Recommended deployment](architecture.md#recommended-deployment))
 
-## 构建与运行
+## Build & run
 
-两种方式：**Docker 镜像**（推荐，开箱即用）或源码构建。
+Two options: **Docker image** (recommended, turnkey) or build from source.
 
-### Docker 部署（推荐）
+### Docker (recommended)
 
-镜像内置 `libseccomp2` 运行时、非 root 用户（uid 10000）和默认配置，`docker run` 即用。两种获取方式：
+The image ships `libseccomp2`, a non-root user (uid 10000) and a default config —
+`docker run` and go. Two ways to get it:
 
-**方式 A：从 ghcr.io 拉取（最快）**
+**Option A: pull from ghcr.io (fastest)**
 
 ```bash
 docker pull ghcr.io/lv-agent/lv-sandbox:v0.1.0
-docker tag ghcr.io/lv-agent/lv-sandbox:v0.1.0 lv-sandbox:0.1.0   # 可选，便于复用下方命令
+docker tag ghcr.io/lv-agent/lv-sandbox:v0.1.0 lv-sandbox:0.1.0   # optional, to reuse the commands below
 ```
 
-**方式 B：本地构建**
+**Option B: build locally**
 
 ```bash
-# 本地构建镜像
+# build the image
 docker build -t lv-sandbox:0.1.0 .
 
-# 或一条命令同时产出镜像 + 二进制 tar.gz（无 Docker 环境的兜底）
+# or one command that also produces a binary tar.gz (fallback for non-Docker hosts)
 bash scripts/build-release.sh
 ```
 
-**运行容器**：
+**Run the container**:
 
 ```bash
 docker run -d --name sandbox \
@@ -45,43 +46,49 @@ docker run -d --name sandbox \
   lv-sandbox:0.1.0
 ```
 
-要点：
+Notes:
 
-- 宿主 Linux 内核 ≥ 5.13（Landlock 所需）；docker 默认 seccomp（libseccomp 2.5+）已放行 Landlock syscall，无需额外配置
-- 挂载的 `/safe/worker/sandboxes` 宿主目录需可被 uid 10000 写入：`chown 10000:10000 /safe/worker/sandboxes`
-- 镜像内置配置位于 `/etc/sandbox-server/config.yaml`，用 `-v your-config.yaml:/etc/sandbox-server/config.yaml:ro` 覆盖
-- 容器内 cgroup v2 受限时自动降级到 rlimit 兜底（内置配置已设 `fail_closed: false`）
-- 无需 `--privileged`
+- Host Linux kernel ≥ 5.13 (Landlock); Docker's default seccomp (libseccomp 2.5+)
+  already permits Landlock syscalls — no extra config needed
+- The mounted `/safe/worker/sandboxes` host dir must be writable by uid 10000:
+  `chown 10000:10000 /safe/worker/sandboxes`
+- The in-image config lives at `/etc/sandbox-server/config.yaml`; override with
+  `-v your-config.yaml:/etc/sandbox-server/config.yaml:ro`
+- If cgroup v2 is unavailable inside the container it degrades to rlimit
+  (the in-image config sets `fail_closed: false`)
+- No `--privileged` needed
 
-健康检查：`curl http://127.0.0.1:8080/health`
+Health check: `curl http://127.0.0.1:8080/health`
 
-`build-release.sh` 产出的 `dist/lv-sandbox-<版本>-x86_64-gnu.tar.gz` 内含 `sandbox-server`/`sandbox-mcp`/示例配置/快速说明，解压后 `./sandbox-server --config config.yaml.example` 即可运行（需宿主 `libseccomp2`）。
+`build-release.sh` produces `dist/lv-sandbox-<version>-x86_64-gnu.tar.gz` containing
+`sandbox-server` / `sandbox-mcp` / a sample config / a quick-start note — unpack
+and run `./sandbox-server --config config.yaml.example` (needs host `libseccomp2`).
 
-### 源码构建
+### Build from source
 
-编译需 `libseccomp-dev`，运行需 `libseccomp2`。
+Build needs `libseccomp-dev`, run needs `libseccomp2`.
 
 ```bash
 cargo build --workspace --release
 ./target/release/sandbox-server --config config.yaml
 ```
 
-配置文件查找优先级：`--config` 参数 > `SANDBOX_CONFIG` 环境变量 > `/etc/sandbox-server/config.yaml` > 内置默认。
+Config lookup order: `--config` arg > `SANDBOX_CONFIG` env > `/etc/sandbox-server/config.yaml` > built-in default.
 
 ---
 
 ## HTTP API
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/submit` | 提交并执行任务（同步返回结果） |
-| `GET` | `/api/v1/status` | 查询 worker 状态（运行数、并发上限、uptime） |
-| `GET` | `/api/v1/profiles` | 列出所有可用 profile |
-| `POST` | `/api/v1/reload` | 热重载配置（无需重启更新 profile） |
-| `GET` | `/metrics` | Prometheus 指标 |
-| `GET` | `/health` | 健康检查 |
+| `POST` | `/api/v1/submit` | submit and execute a task (returns result synchronously) |
+| `GET` | `/api/v1/status` | worker status (running count, concurrency cap, uptime) |
+| `GET` | `/api/v1/profiles` | list available profiles |
+| `POST` | `/api/v1/reload` | hot-reload config (update profiles without restart) |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/health` | health check |
 
-### 提交任务
+### Submit a task
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/submit \
@@ -95,7 +102,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
   }'
 ```
 
-返回：
+Response:
 
 ```json
 {
@@ -110,36 +117,36 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
 }
 ```
 
-`status` 可能值：`Completed`、`TimedOut`、`Killed`、`SandboxInitFailed`、`Error`。
+`status` values: `Completed`, `TimedOut`, `Killed`, `SandboxInitFailed`, `Error`.
 
-### Profile
+### Profiles
 
-内置三个 profile，按任务运行时选择：
+Three built-in profiles, chosen per task at submit time:
 
-| profile | 适用 | 内存上限 | 默认超时 |
+| profile | use case | mem cap | default timeout |
 |---|---|---|---|
-| `shell` | 简单 shell 命令 | 128 MB | 5s |
-| `python` | Python 脚本 | 256 MB | 5s |
-| `node` | Node.js 脚本 | 256 MB | 5s |
+| `shell` | simple shell commands | 128 MB | 5s |
+| `python` | Python scripts | 256 MB | 5s |
+| `node` | Node.js scripts | 256 MB | 5s |
 
-自定义 profile 通过配置文件添加（见 [配置参考](#配置参考)）。
+Custom profiles are added via the config file (see [Config reference](#config-reference)).
 
 ---
 
-## MCP 集成（Claude Code / Hermes-Agent）
+## MCP integration (Claude Code / Hermes-Agent)
 
-`sandbox-mcp` 把沙箱封装为 4 个 MCP 工具，AI Agent 可直接调用：
+`sandbox-mcp` wraps the sandbox as 4 MCP tools an AI Agent can call directly:
 
-| 工具 | 功能 |
+| Tool | Purpose |
 |---|---|
-| `sandbox_run` | 在沙箱中执行命令，返回结果 |
-| `sandbox_profiles` | 列出可用 profile |
-| `sandbox_status` | 查询 worker 状态 |
-| `sandbox_reload` | 热重载配置 |
+| `sandbox_run` | run a command in the sandbox, return the result |
+| `sandbox_profiles` | list available profiles |
+| `sandbox_status` | query worker status |
+| `sandbox_reload` | hot-reload config |
 
-### 接入 Claude Code
+### Wire up Claude Code
 
-项目根目录已提供 `.mcp.json`：
+A `.mcp.json` is provided at the repo root:
 
 ```json
 {
@@ -156,30 +163,34 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
 }
 ```
 
-前提：sandbox-server 已在 `127.0.0.1:8080` 运行。Claude Code 启动时自动加载 `.mcp.json`，拉起 `sandbox-mcp` 网关，即可在对话中调用沙箱工具。
+Precondition: sandbox-server is already running on `127.0.0.1:8080`. Claude Code
+auto-loads `.mcp.json` on start, spawns the `sandbox-mcp` gateway, and the sandbox
+tools become available in the conversation.
 
-> 生产环境建议把 `command` 改为编译好的二进制（`./target/release/sandbox-mcp`），避免每次启动编译。
+> For production, point `command` at a prebuilt binary
+> (`./target/release/sandbox-mcp`) to avoid compiling on every start.
 
 ### Hermes-Agent
 
-在 Hermes-Agent 的配置中添加同样的 MCP server 连接信息，通过 stdio JSON-RPC 通信即可。
+Add the same MCP server connection info to Hermes-Agent's config; it talks stdio
+JSON-RPC.
 
 ---
 
-## 配置参考
+## Config reference
 
 ```yaml
 server:
   listen_addr: "0.0.0.0:8080"
-  max_concurrent_jobs: 100      # 最大并发任务数
+  max_concurrent_jobs: 100      # max concurrent tasks
   log_level: "info"
   log_format: "json"            # json | text
 
 sandbox:
-  base_dir: "/sandboxes"        # 任务工作空间根目录
-  disk_watermark_mb: 1024       # 磁盘水位，低于则拒绝新任务（0 = 禁用）
+  base_dir: "/sandboxes"        # task workspace root
+  disk_watermark_mb: 1024       # disk watermark — reject new tasks below this (0 = disable)
   default_profile: "shell"
-  fail_closed: true             # 安全机制不可用时是否拒绝执行
+  fail_closed: true             # refuse to run when a security mechanism is unavailable
 
 profiles:
   shell:
@@ -188,11 +199,11 @@ profiles:
       nofile: 64
       nproc: 32
       fsize_mb: 10
-    max_stdout_mb: 5            # stdout 截断阈值
+    max_stdout_mb: 5            # stdout truncation threshold
     default_timeout: "5s"
 
   python:
-    extra_readonly_paths:       # 额外只读路径（如离线依赖库）
+    extra_readonly_paths:       # extra read-only paths (e.g. offline dep libs)
       - "/opt/sandbox-libs/python3"
     rlimit:
       cpu_seconds: 5
@@ -200,7 +211,7 @@ profiles:
     max_stdout_mb: 10
     default_timeout: "30s"
 
-  # 自定义 profile：未设字段继承 shell 默认值
+  # custom profile: unset fields inherit the shell defaults
   custom_task:
     rlimit:
       cpu_seconds: 10
@@ -210,36 +221,36 @@ profiles:
       - "/data/shared"
 ```
 
-修改配置后调用 `POST /api/v1/reload` 热重载，无需重启服务。
+After editing, call `POST /api/v1/reload` to hot-reload — no restart needed.
 
-### 超时格式
+### Timeout format
 
-`timeout` / `default_timeout` 支持：`5s`、`100ms`、`1m`，或纯数字（秒）。
+`timeout` / `default_timeout` accept: `5s`, `100ms`, `1m`, or a plain number (seconds).
 
 ---
 
-## 组件
+## Components
 
-| 组件 | 类型 | 职责 |
+| Component | Type | Responsibility |
 |---|---|---|
-| `sandbox-server` | 二进制 | HTTP 服务 + 调度 + 配置 + 指标 |
-| `sandbox-mcp` | 二进制 | MCP 网关，对接 AI Agent |
-| `sandbox-core` | 库 | 任务执行内核，可复用 |
-| `sandbox-landlock` | 库 | Landlock 文件系统隔离 |
-| `sandbox-seccomp` | 库 | seccomp syscall 过滤 |
-| `sandbox-cgroup` | 库 | cgroup v2 资源管理 |
+| `sandbox-server` | binary | HTTP service + scheduling + config + metrics |
+| `sandbox-mcp` | binary | MCP gateway, faces the AI Agent |
+| `sandbox-core` | library | task execution core, reusable |
+| `sandbox-landlock` | library | Landlock filesystem isolation |
+| `sandbox-seccomp` | library | seccomp syscall filtering |
+| `sandbox-cgroup` | library | cgroup v2 resource management |
 
 ---
 
-## 测试
+## Testing
 
 ```bash
-# 全部测试
+# all tests
 cargo test --workspace
 
-# 仅端到端
+# end-to-end only
 cargo test -p sandbox-e2e
 
-# 验证 Docker 镜像（容器内端到端：health + 真跑一个 echo 任务）
+# verify the Docker image (in-container e2e: health + a real echo task)
 bash scripts/verify-image.sh
 ```
