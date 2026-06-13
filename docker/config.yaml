@@ -1,0 +1,23 @@
+# 镜像内置默认配置（容器场景）
+# 落到镜像 /etc/sandbox-server/config.yaml
+# 可被 SANDBOX_CONFIG 环境变量或 -v 挂载自定义配置覆盖
+
+server:
+  listen_addr: "0.0.0.0:8080"
+  max_concurrent_jobs: 50
+  log_level: "info"
+  log_format: "json"
+
+sandbox:
+  base_dir: "/sandboxes"
+  disk_watermark_mb: 0
+  default_profile: "shell"
+  fail_closed: false        # 容器内 cgroup 可能降级 → 降级而非拒绝执行
+
+profiles:
+  shell:
+    default_timeout: "10s"
+  python:
+    default_timeout: "30s"
+  node:
+    default_timeout: "30s"

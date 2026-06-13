@@ -2,21 +2,59 @@
 
 ## 环境要求
 
-- Linux（依赖 Landlock LSM、cgroup v2、seccomp）
-- Rust 1.75+
+- Linux，宿主内核 ≥ 5.13（Landlock 所需）
+- **Docker 部署**：仅需 Docker，镜像内置其余依赖
+- **源码构建**：Rust 1.75+、`libseccomp-dev`（编译）/ `libseccomp2`（运行）
 - 推荐以非 root 用户在容器内运行（见[架构文档 · 推荐部署](architecture.md#推荐部署)）
 
 ## 构建与运行
 
+两种方式：**Docker 镜像**（推荐，开箱即用）或源码构建。
+
+### Docker 部署（推荐）
+
+镜像内置 `libseccomp2` 运行时、非 root 用户（uid 10000）和默认配置，`docker run` 即用。
+
 ```bash
-# 构建全部组件
+# 本地构建镜像
+docker build -t lv-sandbox:0.1.0 .
+
+# 或一条命令同时产出镜像 + 二进制 tar.gz（无 Docker 环境的兜底）
+bash scripts/build-release.sh
+```
+
+**运行容器**：
+
+```bash
+docker run -d --name sandbox \
+  -p 8080:8080 \
+  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+  -v /safe/worker/sandboxes:/sandboxes:rw \
+  --cap-drop=ALL --security-opt no-new-privileges \
+  --pids-limit=1000 --memory=4g --cpus=4 \
+  --user 10000:10000 \
+  lv-sandbox:0.1.0
+```
+
+要点：
+
+- 宿主 Linux 内核 ≥ 5.13（Landlock 所需）；docker 默认 seccomp（libseccomp 2.5+）已放行 Landlock syscall，无需额外配置
+- 挂载的 `/safe/worker/sandboxes` 宿主目录需可被 uid 10000 写入：`chown 10000:10000 /safe/worker/sandboxes`
+- 镜像内置配置位于 `/etc/sandbox-server/config.yaml`，用 `-v your-config.yaml:/etc/sandbox-server/config.yaml:ro` 覆盖
+- 容器内 cgroup v2 受限时自动降级到 rlimit 兜底（内置配置已设 `fail_closed: false`）
+- 无需 `--privileged`
+
+健康检查：`curl http://127.0.0.1:8080/health`
+
+`build-release.sh` 产出的 `dist/lv-sandbox-<版本>-x86_64-gnu.tar.gz` 内含 `sandbox-server`/`sandbox-mcp`/示例配置/快速说明，解压后 `./sandbox-server --config config.yaml.example` 即可运行（需宿主 `libseccomp2`）。
+
+### 源码构建
+
+编译需 `libseccomp-dev`，运行需 `libseccomp2`。
+
+```bash
 cargo build --workspace --release
-
-# 启动 HTTP 服务（默认 0.0.0.0:8080）
-./target/release/sandbox-server
-
-# 指定配置文件
-./target/release/sandbox-server --config /path/to/config.yaml
+./target/release/sandbox-server --config config.yaml
 ```
 
 配置文件查找优先级：`--config` 参数 > `SANDBOX_CONFIG` 环境变量 > `/etc/sandbox-server/config.yaml` > 内置默认。
@@ -192,4 +230,7 @@ cargo test --workspace
 
 # 仅端到端
 cargo test -p sandbox-e2e
+
+# 验证 Docker 镜像（容器内端到端：health + 真跑一个 echo 任务）
+bash scripts/verify-image.sh
 ```

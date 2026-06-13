@@ -11,3 +11,6 @@ Cargo.lock
 
 # VEPS 文档目录（本地使用，不纳入版本控制）
 veps/
+
+# 构建分发产物（scripts/build-release.sh 输出，不纳入版本控制）
+/dist/

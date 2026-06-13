@@ -1,0 +1,33 @@
+# 构建产物 / 分发产物
+target/
+dist/
+
+# 版本控制
+.git/
+.gitignore
+.gitattributes
+
+# 内部设计文档（不进镜像）
+veps/
+
+# Claude Code / 工具元数据
+.claude/
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 对外文档（镜像不需要）
+# 注意：tests/ 不能排除——workspace Cargo.toml 把 tests/e2e 列为 member，
+# cargo 解析 workspace 时需要其 Cargo.toml 存在（-p 不会编译它，runtime 也不含它）
+docs/
+
+# 杂项 / 临时
+*.log
+*.tmp
+*.tar.gz
+Dockerfile*
+.dockerignore

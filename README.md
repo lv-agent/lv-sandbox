@@ -14,14 +14,28 @@
 
 ## 快速开始
 
+**Docker（推荐）**：
+
 ```bash
-# 构建
+docker build -t lv-sandbox:0.1.0 .
+docker run -d --name sandbox -p 8080:8080 \
+  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+  -v /safe/worker/sandboxes:/sandboxes:rw \
+  --cap-drop=ALL --security-opt no-new-privileges \
+  --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
+  lv-sandbox:0.1.0
+```
+
+**或源码构建**（需 libseccomp-dev / libseccomp2）：
+
+```bash
 cargo build --workspace --release
-
-# 启动服务
 ./target/release/sandbox-server
+```
 
-# 执行一个任务
+执行一个任务：
+
+```bash
 curl -X POST http://127.0.0.1:8080/api/v1/submit \
   -H 'content-type: application/json' \
   -d '{"job_id":"demo-1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
