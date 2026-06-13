@@ -52,12 +52,22 @@ prof=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/profiles")
 echo "   $prof"
 echo "$prof" | grep -q '"shell"' || { echo "✗ 缺 shell profile"; exit 1; }
 
-echo "==> /api/v1/submit (echo)"
-resp=$(curl -s -X POST "http://127.0.0.1:$HOST_PORT/api/v1/submit" \
+echo "==> /api/v1/jobs (echo, 异步提交)"
+resp=$(curl -s -X POST "http://127.0.0.1:$HOST_PORT/api/v1/jobs" \
     -H 'content-type: application/json' \
     -d '{"job_id":"verify-1","argv":["/bin/echo","hello sandbox"],"profile_name":"shell","timeout":"5s","custom_env":{}}')
 echo "   $resp"
-echo "$resp" | grep -q '"status":"Completed"' || { echo "✗ 任务未 Completed"; exit 1; }
+echo "$resp" | grep -q '"status":"Running"' || { echo "✗ 提交未返回 Running"; exit 1; }
+
+echo "==> 轮询 GET /api/v1/jobs/verify-1"
+ok=0
+for i in $(seq 1 50); do
+    resp=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/jobs/verify-1")
+    if echo "$resp" | grep -q '"status":"Completed"'; then ok=1; break; fi
+    sleep 0.1
+done
+[ "$ok" = 1 ] || { echo "✗ 任务未 Completed: $resp"; exit 1; }
+echo "   $resp"
 echo "$resp" | grep -q '"exit_code":0'       || { echo "✗ exit_code 非 0"; exit 1; }
 echo "$resp" | grep -q 'hello sandbox'       || { echo "✗ stdout 不含预期输出"; exit 1; }
 

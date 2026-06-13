@@ -178,3 +178,57 @@ pub async fn send_and_parse<T: serde::de::DeserializeOwned>(
     let parsed: T = serde_json::from_slice(&body).unwrap();
     (status, parsed)
 }
+
+/// cr-018: 提交并等待完成（POST /jobs + 轮询 GET /jobs/{id}）。
+/// 返回 (最终 HTTP 状态码, job JSON)。job JSON 在 Done 时含
+/// stdout/stderr/exit_code/status/duration_ms/timed_out 等字段。
+pub async fn submit_and_wait(
+    app: Router,
+    job_id: &str,
+    argv: &[&str],
+    profile: &str,
+    timeout: &str,
+    env: HashMap<String, String>,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    // POST /jobs（create）
+    let body = serde_json::json!({
+        "job_id": job_id,
+        "argv": argv,
+        "profile_name": profile,
+        "timeout": timeout,
+        "custom_env": env,
+    });
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+    let create_resp = app.clone().oneshot(create_req).await.unwrap();
+    assert!(
+        create_resp.status() == axum::http::StatusCode::ACCEPTED
+            || create_resp.status() == axum::http::StatusCode::OK,
+        "create 应返回 202/200，实际: {}",
+        create_resp.status()
+    );
+
+    // 轮询 GET /jobs/{id}（上限 10s）
+    for _ in 0..200 {
+        let get_req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/v1/jobs/{}", job_id))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(get_req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if json["status"] != "Running" {
+            return (status, json);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("submit_and_wait 超时：job {} 10s 内未完成", job_id);
+}

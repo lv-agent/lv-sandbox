@@ -67,12 +67,14 @@ cargo build --workspace --release
 ./target/release/sandbox-server
 ```
 
-Run a task:
+Run a task (async — submit returns `job_id` immediately, poll `GET /jobs/{id}` for the result):
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/submit \
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
   -H 'content-type: application/json' \
   -d '{"job_id":"demo-1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+# → {"job_id":"demo-1","status":"Running"}
+curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 ```
 
 ## Documentation

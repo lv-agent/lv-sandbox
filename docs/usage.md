@@ -81,17 +81,22 @@ Config lookup order: `--config` arg > `SANDBOX_CONFIG` env > `/etc/sandbox-serve
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/submit` | submit and execute a task (returns result synchronously) |
+| `POST` | `/api/v1/jobs` | submit a task (async — returns `job_id` immediately, runs in background) |
+| `GET` | `/api/v1/jobs/{id}` | query job status/result (`Running` or the final `JobResult`) |
+| `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
 | `GET` | `/api/v1/status` | worker status (running count, concurrency cap, uptime) |
 | `GET` | `/api/v1/profiles` | list available profiles |
 | `POST` | `/api/v1/reload` | hot-reload config (update profiles without restart) |
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/health` | health check |
 
-### Submit a task
+### Submit a task (async)
+
+Submit returns the `job_id` immediately (`202 Accepted`); the task runs in the
+background. Poll `GET /jobs/{id}` for the result.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/submit \
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
   -H 'content-type: application/json' \
   -d '{
     "job_id": "demo-1",
@@ -103,6 +108,18 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
 ```
 
 Response:
+
+```json
+{ "job_id": "demo-1", "status": "Running" }
+```
+
+Query the result:
+
+```bash
+curl http://127.0.0.1:8080/api/v1/jobs/demo-1
+```
+
+Response (once done):
 
 ```json
 {
@@ -117,7 +134,13 @@ Response:
 }
 ```
 
-`status` values: `Completed`, `TimedOut`, `Killed`, `SandboxInitFailed`, `Error`.
+Cancel a running job:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
+```
+
+`status` values: `Completed`, `TimedOut`, `Killed`, `Cancelled`, `Error`.
 
 ### Profiles
 

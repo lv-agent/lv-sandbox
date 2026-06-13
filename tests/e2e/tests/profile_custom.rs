@@ -2,6 +2,8 @@
 //!
 //! 验证 YAML 配置的自定义 profile 通过完整链路执行
 
+use std::collections::HashMap;
+
 use axum::http::StatusCode;
 use sandbox_e2e::helpers::*;
 use sandbox_server::config::ProfileConfig;
@@ -17,15 +19,22 @@ async fn 自定义profile覆盖rlimit通过http执行() {
     };
 
     let (_tmp, app) = create_test_app_with_profiles(vec![custom]).await;
-    let (status, result) = send_and_parse::<serde_json::Value>(
+    let (status, result) = submit_and_wait(
         app,
-        make_submit_request_with_profile("custom-rl-001", &["/bin/echo", "custom_rl"], "custom_rl"),
+        "custom-rl-001",
+        &["/bin/echo", "custom_rl"],
+        "custom_rl",
+        "5s",
+        HashMap::new(),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["status"], "Completed");
-    assert!(result["stdout"].as_str().unwrap().contains("custom_rl"));
+    assert_eq!(result["status"].as_str().unwrap(), "Completed");
+    assert!(result["stdout"]
+        .as_str()
+        .unwrap()
+        .contains("custom_rl"));
 }
 
 #[tokio::test]
@@ -35,14 +44,18 @@ async fn 自定义profile带extra_readonly_paths() {
     custom.extra_readonly_paths = vec!["/usr/lib".into()];
 
     let (_tmp, app) = create_test_app_with_profiles(vec![custom]).await;
-    let (status, result) = send_and_parse::<serde_json::Value>(
+    let (status, result) = submit_and_wait(
         app,
-        make_submit_request_with_profile("custom-path-001", &["/bin/echo", "paths_ok"], "custom_paths"),
+        "custom-path-001",
+        &["/bin/echo", "paths_ok"],
+        "custom_paths",
+        "5s",
+        HashMap::new(),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["status"], "Completed");
+    assert_eq!(result["status"].as_str().unwrap(), "Completed");
 }
 
 #[tokio::test]
@@ -53,14 +66,12 @@ async fn 自定义profile覆盖内置shell() {
     overridden.default_timeout = std::time::Duration::from_secs(10);
 
     let (_tmp, app) = create_test_app_with_profiles(vec![overridden]).await;
-    let (status, result) = send_and_parse::<serde_json::Value>(
-        app,
-        make_submit_request("override-shell-001", &["/bin/echo", "overridden"]),
-    )
-    .await;
+    let (status, result) =
+        submit_and_wait(app, "override-shell-001", &["/bin/echo", "overridden"], "shell", "5s", HashMap::new())
+            .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["status"], "Completed");
+    assert_eq!(result["status"].as_str().unwrap(), "Completed");
 }
 
 #[tokio::test]
@@ -70,15 +81,19 @@ async fn 自定义profile带custom_timeout() {
     custom.default_timeout = std::time::Duration::from_secs(30);
 
     let (_tmp, app) = create_test_app_with_profiles(vec![custom]).await;
-    // 不指定 timeout，使用 profile 的 default_timeout
-    let (status, result) = send_and_parse::<serde_json::Value>(
+    // 不指定 timeout，使用 profile 的 default_timeout（submit_and_wait 传 "5s" 仍可完成）
+    let (status, result) = submit_and_wait(
         app,
-        make_submit_request_with_profile("long-001", &["/bin/echo", "long"], "long_task"),
+        "long-001",
+        &["/bin/echo", "long"],
+        "long_task",
+        "5s",
+        HashMap::new(),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["status"], "Completed");
+    assert_eq!(result["status"].as_str().unwrap(), "Completed");
 }
 
 #[tokio::test]

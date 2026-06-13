@@ -74,17 +74,21 @@ cargo build --workspace --release
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/api/v1/submit` | 提交并执行任务（同步返回结果） |
+| `POST` | `/api/v1/jobs` | 提交任务（异步——立即返回 `job_id`，后台运行） |
+| `GET` | `/api/v1/jobs/{id}` | 查询任务状态/结果（`Running` 或完成时的 `JobResult`） |
+| `POST` | `/api/v1/jobs/{id}/cancel` | 取消运行中的任务 |
 | `GET` | `/api/v1/status` | 查询 worker 状态（运行数、并发上限、uptime） |
 | `GET` | `/api/v1/profiles` | 列出所有可用 profile |
 | `POST` | `/api/v1/reload` | 热重载配置（无需重启更新 profile） |
 | `GET` | `/metrics` | Prometheus 指标 |
 | `GET` | `/health` | 健康检查 |
 
-### 提交任务
+### 提交任务（异步）
+
+提交后立即返回 `job_id`（`202 Accepted`），任务在后台执行。轮询 `GET /jobs/{id}` 获取结果。
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/submit \
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
   -H 'content-type: application/json' \
   -d '{
     "job_id": "demo-1",
@@ -96,6 +100,18 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
 ```
 
 返回：
+
+```json
+{ "job_id": "demo-1", "status": "Running" }
+```
+
+查询结果：
+
+```bash
+curl http://127.0.0.1:8080/api/v1/jobs/demo-1
+```
+
+返回（完成后）：
 
 ```json
 {
@@ -110,7 +126,13 @@ curl -X POST http://127.0.0.1:8080/api/v1/submit \
 }
 ```
 
-`status` 可能值：`Completed`、`TimedOut`、`Killed`、`SandboxInitFailed`、`Error`。
+取消运行中的任务：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
+```
+
+`status` 可能值：`Completed`、`TimedOut`、`Killed`、`Cancelled`、`Error`。
 
 ### Profile
 

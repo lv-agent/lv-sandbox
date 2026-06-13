@@ -35,12 +35,14 @@ cargo build --workspace --release
 ./target/release/sandbox-server
 ```
 
-执行一个任务：
+执行一个任务（异步——提交立即返回 `job_id`，用 `GET /jobs/{id}` 轮询结果）：
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/v1/submit \
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
   -H 'content-type: application/json' \
   -d '{"job_id":"demo-1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+# → {"job_id":"demo-1","status":"Running"}
+curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 ```
 
 ## 文档

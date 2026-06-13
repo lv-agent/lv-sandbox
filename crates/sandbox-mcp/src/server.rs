@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use crate::tools::SandboxRunParams;
     use std::collections::HashMap;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn make_server(uri: String) -> SandboxMcpServer {
@@ -100,7 +100,17 @@ mod tests {
     async fn sandbox_run_返回job结果json() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/v1/submit"))
+            .and(path("/api/v1/jobs"))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "job_id": "j1", "status": "Running",
+                })),
+            )
+            .mount(&mock)
+            .await;
+        // job_id 自动生成，用 regex 匹配 GET 路径
+        Mock::given(method("GET"))
+            .and(path_regex("/api/v1/jobs/.*"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "job_id": "j1", "status": "Completed", "exit_code": 0,
                 "signal": null, "stdout": "ok\n", "stderr": "", "duration_ms": 5, "timed_out": false,

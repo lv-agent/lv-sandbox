@@ -1,5 +1,7 @@
 //! 超时 + Prometheus 指标 E2E 测试
 
+use std::collections::HashMap;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
@@ -9,39 +11,40 @@ use sandbox_e2e::helpers::*;
 #[tokio::test]
 async fn timeout_returns_timed_out_via_http() {
     let (_tmp, app) = create_test_app().await;
-    let (status, result) = send_and_parse::<serde_json::Value>(
+    let (status, result) = submit_and_wait(
         app,
-        make_submit_request_with_timeout(
-            "timeout-001",
-            &["/bin/sh", "-c", "echo before; exec /bin/sleep 30"],
-            "shell",
-            "1s",
-        ),
+        "timeout-001",
+        &["/bin/sh", "-c", "echo before; exec /bin/sleep 30"],
+        "shell",
+        "1s",
+        HashMap::new(),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["status"], "TimedOut");
-    assert_eq!(result["timed_out"], true);
+    assert_eq!(result["status"].as_str().unwrap(), "TimedOut");
+    assert_eq!(result["timed_out"].as_bool(), Some(true));
 }
 
 #[tokio::test]
 async fn timeout前产生的stdout被捕获() {
     let (_tmp, app) = create_test_app().await;
-    let (status, result) = send_and_parse::<serde_json::Value>(
+    let (status, result) = submit_and_wait(
         app,
-        make_submit_request_with_timeout(
-            "timeout-002",
-            &["/bin/sh", "-c", "echo captured_output; exec /bin/sleep 30"],
-            "shell",
-            "1s",
-        ),
+        "timeout-002",
+        &["/bin/sh", "-c", "echo captured_output; exec /bin/sleep 30"],
+        "shell",
+        "1s",
+        HashMap::new(),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
     let stdout = result["stdout"].as_str().unwrap();
-    assert!(stdout.contains("captured_output"), "超时前的 stdout 应被捕获");
+    assert!(
+        stdout.contains("captured_output"),
+        "超时前的 stdout 应被捕获"
+    );
 }
 
 #[tokio::test]
@@ -74,16 +77,24 @@ async fn 执行job后metrics_started_counter递增() {
     let baseline = prometheus_metric_value("sandbox_job_started_total");
 
     let (_tmp, app) = create_test_app().await;
-    let _ = app
-        .oneshot(make_submit_request("metric-001", &["/bin/echo", "test"]))
-        .await
-        .unwrap();
+    // cr-018: 异步接口下 started counter 在 spawn 任务内递增，
+    // submit_and_wait 等到 job 完成，保证 counter 已更新。
+    let _ = submit_and_wait(
+        app,
+        "metric-001",
+        &["/bin/echo", "test"],
+        "shell",
+        "5s",
+        HashMap::new(),
+    )
+    .await;
 
     let after = prometheus_metric_value("sandbox_job_started_total");
     assert!(
         after > baseline,
         "started counter 应递增: before={}, after={}",
-        baseline, after
+        baseline,
+        after
     );
 }
 
@@ -92,21 +103,22 @@ async fn 超时job后metrics_timeout_counter递增() {
     let baseline = prometheus_metric_value("sandbox_job_timeout_total");
 
     let (_tmp, app) = create_test_app().await;
-    let _ = app
-        .oneshot(make_submit_request_with_timeout(
-            "metric-timeout",
-            &["/bin/sh", "-c", "exec /bin/sleep 30"],
-            "shell",
-            "1s",
-        ))
-        .await
-        .unwrap();
+    let _ = submit_and_wait(
+        app,
+        "metric-timeout",
+        &["/bin/sh", "-c", "exec /bin/sleep 30"],
+        "shell",
+        "1s",
+        HashMap::new(),
+    )
+    .await;
 
     let after = prometheus_metric_value("sandbox_job_timeout_total");
     assert!(
         after > baseline,
         "timeout counter 应递增: before={}, after={}",
-        baseline, after
+        baseline,
+        after
     );
 }
 

@@ -1,9 +1,11 @@
-//! HTTP API 路由
+//! HTTP API 路由（cr-018 异步化）
 //!
-//! POST /api/v1/submit  — 提交 job
-//! GET  /api/v1/status  — worker 状态
-//! GET  /metrics        — Prometheus 指标
-//! GET  /health         — 健康检查
+//! POST /api/v1/jobs             — 提交 job（异步，返回 job_id）
+//! GET  /api/v1/jobs/{id}        — 查询 job 状态/结果
+//! POST /api/v1/jobs/{id}/cancel — 取消 job
+//! GET  /api/v1/status           — worker 状态
+//! GET  /metrics                 — Prometheus 指标
+//! GET  /health                  — 健康检查
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +32,9 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
-        .route("/api/v1/submit", post(submit))
+        .route("/api/v1/jobs", post(create_job))
+        .route("/api/v1/jobs/{job_id}", get(get_job))
+        .route("/api/v1/jobs/{job_id}/cancel", post(cancel_job))
         .route("/api/v1/status", get(status))
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/reload", post(reload))
@@ -65,7 +69,7 @@ async fn metrics() -> impl IntoResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct SubmitRequest {
+struct CreateJobRequest {
     job_id: String,
     argv: Vec<String>,
     profile_name: String,
@@ -74,15 +78,28 @@ struct SubmitRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct SubmitResponse {
+struct CreateJobResponse {
     job_id: String,
     status: String,
+}
+
+/// cr-018: GET /jobs/{id} 查询响应。Running 时仅 job_id+status；Done 时含完整结果。
+#[derive(Debug, Serialize)]
+struct JobResponse {
+    job_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     signal: Option<i32>,
-    stdout: String,
-    stderr: String,
-    duration_ms: u64,
-    timed_out: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timed_out: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,11 +107,11 @@ struct ErrorResponse {
     error: String,
 }
 
-async fn submit(
-    State(scheduler): State<Arc<AppState>>,
-    Json(req): Json<SubmitRequest>,
+/// cr-018: POST /jobs — 异步提交，立即返回 job_id
+async fn create_job(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateJobRequest>,
 ) -> impl IntoResponse {
-    // 解析 timeout
     let timeout = match req.timeout.as_deref() {
         Some(t) => match parse_duration(t) {
             Some(d) => Some(d),
@@ -111,44 +128,100 @@ async fn submit(
         None => None,
     };
 
-    let custom_env = req.custom_env.unwrap_or_default();
-
     let job_req = sandbox_core::job::JobRequest {
         job_id: req.job_id,
         argv: req.argv,
         profile_name: req.profile_name,
         timeout,
-        custom_env,
+        custom_env: req.custom_env.unwrap_or_default(),
         stdin_data: None,
     };
 
-    match scheduler.scheduler.clone().submit(job_req).await {
-        Ok(result) => {
-            let resp = SubmitResponse {
+    let job_id = state.scheduler.submit_async(job_req).await;
+    (
+        StatusCode::ACCEPTED,
+        Json(CreateJobResponse {
+            job_id,
+            status: "Running".into(),
+        }),
+    )
+        .into_response()
+}
+
+/// cr-018: GET /jobs/{id} — 查询状态/结果
+async fn get_job(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    use crate::scheduler::JobState;
+    match state.scheduler.get_job(&job_id) {
+        Some(JobState::Running) => (
+            StatusCode::OK,
+            Json(JobResponse {
+                job_id,
+                status: "Running".into(),
+                exit_code: None,
+                signal: None,
+                stdout: None,
+                stderr: None,
+                duration_ms: None,
+                timed_out: None,
+            }),
+        )
+            .into_response(),
+        Some(JobState::Done(result)) => (
+            StatusCode::OK,
+            Json(JobResponse {
                 job_id: result.job_id,
                 status: format!("{:?}", result.status),
                 exit_code: result.exit_code,
                 signal: result.signal,
-                stdout: String::from_utf8_lossy(&result.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&result.stderr).to_string(),
-                duration_ms: result.duration.as_millis() as u64,
-                timed_out: result.timed_out,
-            };
-            (StatusCode::OK, Json(resp)).into_response()
-        }
-        Err(e) => {
-            let status = if matches!(
-                e,
-                crate::scheduler::SchedulerError::Runner(
-                    sandbox_core::CoreError::ProfileNotFound(_)
-                )
-            ) {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, Json(ErrorResponse { error: e.to_string() })).into_response()
-        }
+                stdout: Some(String::from_utf8_lossy(&result.stdout).to_string()),
+                stderr: Some(String::from_utf8_lossy(&result.stderr).to_string()),
+                duration_ms: Some(result.duration.as_millis() as u64),
+                timed_out: Some(result.timed_out),
+            }),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "任务不存在或已过期".into(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// cr-018: POST /jobs/{id}/cancel — 取消
+async fn cancel_job(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    use crate::scheduler::CancelError;
+    match state.scheduler.cancel_job(&job_id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(CreateJobResponse {
+                job_id,
+                status: "Cancelled".into(),
+            }),
+        )
+            .into_response(),
+        Err(CancelError::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "任务不存在".into(),
+            }),
+        )
+            .into_response(),
+        Err(CancelError::AlreadyDone) => (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "任务已完成，无法取消".into(),
+            }),
+        )
+            .into_response(),
     }
 }
 
