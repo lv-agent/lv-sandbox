@@ -1,0 +1,31 @@
+[package]
+name = "sandbox-mcp"
+description = "MCP 网关：将 sandbox-server REST API 封装为 MCP 工具"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sandbox_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sandbox-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "process"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+wiremock = "0.6"

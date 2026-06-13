@@ -1,0 +1,18 @@
+[package]
+name = "sandbox-seccomp"
+description = "seccomp-BPF 管理：filter 构建器、denylist、clone namespace flag 过滤"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libseccomp = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

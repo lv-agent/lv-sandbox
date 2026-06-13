@@ -1,0 +1,18 @@
+[package]
+name = "sandbox-landlock"
+description = "Landlock LSM 封装：ABI 检测、文件系统策略构建、预编译 ruleset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+landlock = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

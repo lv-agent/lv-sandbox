@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sandbox": {
+      "command": "cargo",
+      "args": ["run", "-p", "sandbox-mcp", "--quiet", "--"],
+      "env": {
+        "SANDBOX_SERVER_URL": "http://127.0.0.1:8080",
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}

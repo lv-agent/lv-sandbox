@@ -1,0 +1,30 @@
+[package]
+name = "sandbox-core"
+description = "轻量级沙箱核心：进程编排、环境/FD 清理、rlimit、workspace 管理、job 状态机"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sandbox-landlock = { workspace = true }
+sandbox-seccomp = { workspace = true }
+sandbox-cgroup = { workspace = true }
+tokio = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+libseccomp = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+futures = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bench_lifecycle"
+harness = false

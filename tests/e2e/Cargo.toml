@@ -1,0 +1,21 @@
+[package]
+name = "sandbox-e2e"
+description = "端到端集成测试"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sandbox-core = { workspace = true }
+sandbox-server = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+axum = { workspace = true }
+tower = "0.5"
+tempfile = "3"
+libc = { workspace = true }
+prometheus = { workspace = true }
+futures = "0.3"

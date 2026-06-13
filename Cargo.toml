@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sandbox-landlock",
+    "crates/sandbox-seccomp",
+    "crates/sandbox-cgroup",
+    "crates/sandbox-core",
+    "crates/sandbox-server",
+    "crates/sandbox-mcp",
+    "tests/e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# 内部 crate
+sandbox-landlock = { path = "crates/sandbox-landlock" }
+sandbox-seccomp = { path = "crates/sandbox-seccomp" }
+sandbox-cgroup = { path = "crates/sandbox-cgroup" }
+sandbox-core = { path = "crates/sandbox-core" }
+sandbox-server = { path = "crates/sandbox-server" }
+sandbox-mcp = { path = "crates/sandbox-mcp" }
+
+# 异步运行时
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "signal", "io-util"] }
+
+# Landlock
+landlock = "0.4"
+
+# seccomp
+libseccomp = "0.3"
+
+# 系统 API
+nix = { version = "0.29", features = ["process", "signal", "resource", "fs"] }
+libc = "0.2"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 错误处理
+thiserror = "2"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Metrics
+prometheus = "0.13"
+
+# 配置
+serde_yaml = "0.9"
+
+# 时间
+chrono = "0.4"
+
+# HTTP
+axum = { version = "0.8", features = ["json"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+# MCP（Model Context Protocol）
+rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
+schemars = "1"
+uuid = { version = "1", features = ["v4"] }

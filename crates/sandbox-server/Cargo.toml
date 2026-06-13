@@ -1,0 +1,35 @@
+[package]
+name = "sandbox-server"
+description = "轻量级 Agent 沙箱服务"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sandbox_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sandbox-server"
+path = "src/main.rs"
+
+[dependencies]
+sandbox-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+prometheus = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+once_cell = "1"
+
+[dev-dependencies]
+tempfile = "3"
+futures = "0.3"
+tower = "0.5"

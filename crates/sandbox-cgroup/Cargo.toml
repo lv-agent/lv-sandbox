@@ -1,0 +1,19 @@
+[package]
+name = "sandbox-cgroup"
+description = "cgroup v2 管理：可用性检测、资源限制、进程迁移、资源统计"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nix = { workspace = true }
+libc = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+libc = { workspace = true }
