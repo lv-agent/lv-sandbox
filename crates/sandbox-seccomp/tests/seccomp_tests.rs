@@ -178,3 +178,98 @@ fn prepared_filter_多条denylist规则() {
         "many_rules_ok"
     );
 }
+
+// ==================== cr-016: 默认禁网 ====================
+
+/// 单元：deny_network() 应加入 17 条网络 socket 规则（Socketpair 保留不 deny）
+#[test]
+fn deny_network_包含全部网络syscall() {
+    let profile = SeccompProfile::denylist().deny_network();
+    assert_eq!(profile.rules().len(), 17, "deny_network 应加入 17 条网络规则");
+
+    // 逐一验证关键网络 syscall 在规则中
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Socket));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Connect));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Bind));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Listen));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Accept));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Accept4));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Sendto));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Recvfrom));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Sendmsg));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Recvmsg));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Getsockopt));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Setsockopt));
+    // Socketpair 明确不 deny（保留本地 IPC）
+    assert!(!profile.rules().iter().any(|r| r.syscall == Syscall::Socketpair));
+}
+
+/// 单元：default_denylist() 应自动包含网络 deny
+#[test]
+fn default_denylist_默认包含网络deny() {
+    let profile = SeccompProfile::default_denylist();
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Socket));
+    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Connect));
+}
+
+/// 回归保护：默认禁网不应影响正常本地命令（echo）
+#[test]
+fn 默认禁网_正常本地命令不受影响() {
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_denylist())
+        .expect("prepare 不应失败");
+
+    let output = unsafe {
+        Command::new("/bin/echo")
+            .arg("netblock_ok")
+            .pre_exec(move || {
+                prepared.apply().expect("seccomp apply 不应失败");
+                Ok(())
+            })
+            .output()
+            .expect("执行子进程失败")
+    };
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "netblock_ok"
+    );
+}
+
+/// 默认禁网：socket() 调用应被 seccomp 阻止（进程被杀）。
+/// 依赖 python3 触发 socket()；缺失时跳过，避免误报。
+#[test]
+fn 默认禁网_socket调用被阻止() {
+    // python3 不存在则跳过（不误报为通过）
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("跳过：环境无 python3，无法触发 socket() 验证默认禁网");
+        return;
+    }
+
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_denylist())
+        .expect("prepare 不应失败");
+
+    // 子进程 apply seccomp → python3 创建 socket
+    // 期望：socket() 触发 KillProcess，进程被杀，不会打印 DONE=0
+    let output = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("python3 -c \"import socket; socket.socket()\" 2>/dev/null; echo DONE=$?")
+            .pre_exec(move || {
+                prepared.apply().expect("seccomp apply 不应失败");
+                Ok(())
+            })
+            .output()
+            .expect("执行子进程失败")
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // socket() 被阻止 → 进程未走到 echo DONE=0
+    assert!(
+        !stdout.contains("DONE=0"),
+        "socket() 应被 seccomp 阻止（进程被杀），实际输出: {stdout}"
+    );
+}

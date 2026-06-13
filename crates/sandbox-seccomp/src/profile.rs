@@ -105,6 +105,8 @@ impl SeccompProfile {
             .deny(Syscall::IoUringSetup)
             .deny(Syscall::IoUringEnter)
             .deny(Syscall::IoUringRegister)
+            // 网络 socket API（cr-016 默认禁网）
+            .deny_network()
     }
 
     /// 添加拒绝规则
@@ -128,6 +130,38 @@ impl SeccompProfile {
             action: SeccompAction::KillProcess,
             conditions,
         });
+        self
+    }
+
+    /// 拒绝所有网络 socket API（cr-016 默认禁网基线）。
+    /// 保留 socketpair/pipe/epoll 等本地 IPC 与事件机制（它们不联网）。
+    pub fn deny_network(mut self) -> Self {
+        let net_syscalls = [
+            Syscall::Socket,
+            Syscall::Connect,
+            Syscall::Bind,
+            Syscall::Listen,
+            Syscall::Accept,
+            Syscall::Accept4,
+            Syscall::Sendto,
+            Syscall::Recvfrom,
+            Syscall::Sendmsg,
+            Syscall::Recvmsg,
+            Syscall::Sendmmsg,
+            Syscall::Recvmmsg,
+            Syscall::Getsockopt,
+            Syscall::Setsockopt,
+            Syscall::Shutdown,
+            Syscall::Getsockname,
+            Syscall::Getpeername,
+        ];
+        for sc in net_syscalls {
+            self.rules.push(SeccompRule {
+                syscall: sc,
+                action: SeccompAction::KillProcess,
+                conditions: Vec::new(),
+            });
+        }
         self
     }
 

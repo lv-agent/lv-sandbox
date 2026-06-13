@@ -3,6 +3,7 @@
 //! 验证 landlock/seccomp/rlimit/NoNewPrivs/setsid/fd cleanup 在真实执行路径中生效
 
 use sandbox_e2e::helpers::*;
+use std::time::Duration;
 
 #[tokio::test]
 async fn no_new_privs已设置() {
@@ -114,4 +115,38 @@ async fn 内置profile有seccomp_denylist() {
             name
         );
     }
+}
+
+/// cr-016: 默认禁网——尝试联网的任务应被阻止（status 非 Completed）。
+/// 验证 default_denylist → profile → run_job 整条链路传导禁网。
+#[tokio::test]
+async fn 默认禁网_联网任务被阻止() {
+    // 依赖 python3 触发 socket()；缺失则跳过，避免误报
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("跳过：环境无 python3，无法在 e2e 层验证默认禁网");
+        return;
+    }
+
+    let (_tmp, runner) = create_test_runner().await;
+    // python profile：landlock 允许 python3，seccomp = default_denylist（默认禁网）
+    let req = make_job_request_with_profile(
+        "net-001",
+        &["/usr/bin/python3", "-c", "import socket; socket.socket()"],
+        "python",
+        Duration::from_secs(10),
+    );
+    let result = runner.run_job(req).await.expect("执行失败");
+
+    // socket() 被 seccomp KillProcess → 任务不会正常完成
+    assert!(
+        !matches!(result.status, sandbox_core::job::JobStatus::Completed),
+        "尝试联网的任务应被禁网阻止（status 非 Completed），实际: {:?}, exit_code: {:?}, signal: {:?}",
+        result.status,
+        result.exit_code,
+        result.signal
+    );
 }

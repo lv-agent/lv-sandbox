@@ -74,7 +74,7 @@ Each task runs in its own process group, layered with six isolation mechanisms:
 | Mechanism | Effect |
 |---|---|
 | **Landlock** | restricts filesystem access — a task can only read/write its own workspace |
-| **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, …) |
+| **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, …) **and all network socket syscalls — default no-network: tasks cannot make outbound connections, listen, or send/receive traffic** |
 | **rlimit** | caps process-level resources (CPU, file count, process count, file size) |
 | **cgroup v2** | caps real task resource use (memory, CPU, pids); degrades gracefully if unavailable |
 | **Process hardening** | NoNewPrivs disables privilege escalation, setsid detaches the controlling terminal, leaked fds closed, env allowlist |
@@ -97,6 +97,7 @@ refuse execution (fail-closed) or degrade and continue (fail-open).
 - Filling up the workspace (resource limits + alerts)
 - Spawning background processes to escape timeouts (whole-group cleanup)
 - Calling dangerous syscalls
+- **Making network connections** — all network socket syscalls are blocked by default (seccomp); tasks cannot phone home, reach the cloud metadata service (169.254.169.254), or open listeners
 - Inheriting the runner's secret env vars or leaked fds
 
 ### What it does NOT fully stop
@@ -104,6 +105,12 @@ refuse execution (fail-closed) or degrade and continue (fail-open).
 Hardened malicious code exploiting kernel bugs, advanced container escape,
 strong multi-tenant isolation, all side channels. If the task source is fully
 untrusted and the bar is high, use MicroVM / gVisor / Kata / one-container-per-task.
+
+> **Network isolation today is a seccomp denylist, not a kernel-level cutoff.** It
+> blocks programs that go through the standard libc `socket()`/`connect()` path, but
+> a denylist is inherently not exhaustive. The stronger model — per-task network
+> namespace (no NIC) plus a UDS egress proxy with domain allowlist + traffic audit —
+> is planned (cr-017). For now, treat it as "default no-network for ordinary programs."
 
 ### Recommended deployment
 

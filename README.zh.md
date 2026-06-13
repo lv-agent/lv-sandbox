@@ -7,6 +7,7 @@
 ## 特性
 
 - **六重安全隔离**：Landlock（文件系统）+ seccomp（syscall）+ rlimit（资源）+ cgroup v2（内存/CPU/pids）+ 进程隔离（NoNewPrivs/setsid/fd 清理/env 白名单）+ 超时清理
+- **默认禁网**：seccomp 阻断所有网络 socket 系统调用，任务无法发起出站连接或开监听端口（基于黑名单；内核级 netns 隔离规划中——见[安全边界](docs/architecture.md#安全边界)）
 - **并发执行**：一个 worker 同时跑上百个轻量任务，`Semaphore` 限流排队
 - **YAML 配置**：内置 `shell`/`python`/`node` profile，可自定义，支持热重载
 - **HTTP API**：提交任务、查询状态、列 profile、重载配置、Prometheus 指标

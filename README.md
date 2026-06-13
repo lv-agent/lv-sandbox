@@ -35,6 +35,9 @@ a single worker — fast cold-start, low overhead, high throughput.
 - **Six-layer isolation** — Landlock (filesystem) + seccomp (syscalls) + rlimit
   (resources) + cgroup v2 (mem/CPU/pids) + process hardening (NoNewPrivs / setsid
   / fd cleanup / env allowlist) + timeout reaping
+- **Default no-network** — all network socket syscalls are blocked by seccomp; tasks
+  cannot make outbound connections or open listeners (denylist-based; kernel-level
+  netns isolation planned — see [Security boundary](docs/architecture.md#security-boundary))
 - **High concurrency** — one worker runs hundreds of lightweight tasks, bounded
   by a `Semaphore`
 - **YAML profiles** — built-in `shell` / `python` / `node`, fully customisable,

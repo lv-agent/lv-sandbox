@@ -1,5 +1,5 @@
 /// Linux syscall 抽象
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Syscall {
     // 文件系统
     Mount,
@@ -34,6 +34,26 @@ pub enum Syscall {
     // 网络/主机名
     Sethostname,
     Setdomainname,
+
+    // 网络 socket API（cr-016 默认禁网；Socketpair 仅登记，保留不 deny）
+    Socket,
+    Socketpair,
+    Connect,
+    Bind,
+    Listen,
+    Accept,
+    Accept4,
+    Sendto,
+    Recvfrom,
+    Sendmsg,
+    Recvmsg,
+    Sendmmsg,
+    Recvmmsg,
+    Getsockopt,
+    Setsockopt,
+    Shutdown,
+    Getsockname,
+    Getpeername,
 
     // Namespace
     Setns,
