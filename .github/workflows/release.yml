@@ -1,0 +1,54 @@
+name: release
+# 打 v* tag 自动发版：构建镜像推 ghcr.io + 二进制 tar.gz 发 GitHub Release
+# 用法：git tag v0.1.0 && git push github v0.1.0
+# GitHub runner 自带 docker/buildx 且 docker.io 可达，本地踩的坑在此不存在
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 v0.1.0）'
+        required: true
+        default: 'v0.1.0'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 创建 Release
+      packages: write   # 推 ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本
+        id: ver
+        run: echo "version=${{ github.event.inputs.version || github.ref_name }}" >> $GITHUB_OUTPUT
+
+      - name: 构建镜像 + 二进制 tar.gz（复用本地脚本）
+        run: bash scripts/build-release.sh "${{ steps.ver.outputs.version }}"
+
+      - name: 登录 ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: 推送镜像到 ghcr.io
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          IMG=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          docker tag "lv-sandbox:${V}" "${IMG}:${V}"
+          docker tag "lv-sandbox:${V}" "${IMG}:latest"
+          docker push "${IMG}:${V}"
+          docker push "${IMG}:latest"
+          echo "镜像: ${IMG}:${V} / ${IMG}:latest"
+
+      - name: 创建 Release 并上传 tar.gz
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
