@@ -217,8 +217,13 @@ impl SandboxRunner {
         let stderr = stderr_handle.await.unwrap_or_default();
 
         // 14. 确定状态
+        // - 超时 → TimedOut
+        // - 被信号杀死（如 seccomp SIGSYS 违规、外部信号）→ Killed
+        // - 正常退出（含非零退出码）→ Completed
         let status = if timed_out {
             JobStatus::TimedOut
+        } else if exit_status.as_ref().and_then(|s| s.signal()).is_some() {
+            JobStatus::Killed
         } else {
             JobStatus::Completed
         };

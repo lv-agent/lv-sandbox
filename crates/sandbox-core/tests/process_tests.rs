@@ -420,3 +420,24 @@ fn 内置profile有默认seccomp_denylist() {
         );
     }
 }
+
+// ==================== cr-016: 被信号杀死 → Killed ====================
+
+#[tokio::test]
+async fn 被信号杀死的任务_状态为killed() {
+    let (_tmp, runner) = create_test_runner().await;
+
+    // kill -9 $$：进程向自己发 SIGKILL，被信号杀死（非超时、非正常退出）
+    let result = runner
+        .run_job(make_request("kill-001", &["/bin/sh", "-c", "kill -9 $$"]))
+        .await
+        .expect("run_job 不应报错");
+
+    assert!(
+        matches!(result.status, JobStatus::Killed),
+        "被信号杀死的任务应为 Killed，实际: {:?}, signal: {:?}",
+        result.status,
+        result.signal
+    );
+    assert!(!result.timed_out, "自杀不应被记为超时");
+}
