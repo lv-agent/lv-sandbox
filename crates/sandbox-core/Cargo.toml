@@ -11,6 +11,7 @@ sandbox-landlock = { workspace = true }
 sandbox-seccomp = { workspace = true }
 sandbox-cgroup = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 nix = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }

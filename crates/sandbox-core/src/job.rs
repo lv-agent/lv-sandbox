@@ -18,6 +18,8 @@ pub enum JobStatus {
     Completed,
     TimedOut,
     Killed,
+    /// cr-018: 被取消（用户主动 POST /jobs/{id}/cancel）
+    Cancelled,
     SandboxInitFailed(String),
     Error(String),
 }

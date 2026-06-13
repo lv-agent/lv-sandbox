@@ -1,9 +1,11 @@
 //! 调度器：容量检查、排队、并发控制。
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use sandbox_core::job::{JobRequest, JobResult};
 use sandbox_core::SandboxRunner;
@@ -15,6 +17,29 @@ use crate::worker::WorkerStatus;
 pub enum SchedulerError {
     #[error("运行器错误: {0}")]
     Runner(#[from] sandbox_core::CoreError),
+}
+
+/// cr-018: job 运行时状态
+#[derive(Debug, Clone)]
+pub enum JobState {
+    Running,
+    Done(JobResult),
+}
+
+/// cr-018: job 表项
+pub struct JobEntry {
+    pub cancel: CancellationToken,
+    pub state: JobState,
+    pub created_at: Instant,
+}
+
+/// cr-018: cancel 错误
+#[derive(Debug, thiserror::Error)]
+pub enum CancelError {
+    #[error("任务不存在")]
+    NotFound,
+    #[error("任务已完成，无法取消")]
+    AlreadyDone,
 }
 
 /// job 调度器
@@ -30,6 +55,8 @@ pub struct Scheduler {
     max_concurrent_jobs: usize,
     semaphore: Arc<Semaphore>,
     start_time: Instant,
+    /// cr-018: job 运行时表（job_id → entry）
+    jobs: Arc<RwLock<HashMap<String, JobEntry>>>,
 }
 
 impl Scheduler {
@@ -39,6 +66,7 @@ impl Scheduler {
             max_concurrent_jobs: max_concurrent,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             start_time: Instant::now(),
+            jobs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -93,6 +121,85 @@ impl Scheduler {
         *guard = new_runner;
     }
 
+    /// cr-018: 异步提交。注册 job 表项 + 后台执行。立即返回 job_id。
+    pub async fn submit_async(&self, request: JobRequest) -> String {
+        let job_id = request.job_id.clone();
+        let cancel = CancellationToken::new();
+        self.jobs.write().expect("jobs 锁中毒").insert(
+            job_id.clone(),
+            JobEntry {
+                cancel: cancel.clone(),
+                state: JobState::Running,
+                created_at: Instant::now(),
+            },
+        );
+
+        // cr-018: 后台执行（runner 快照 + 共享 jobs 表 + semaphore）
+        let runner = {
+            self.runner.read().expect("runner 锁中毒").clone()
+        };
+        let semaphore = self.semaphore.clone();
+        let jobs = self.jobs.clone();
+        let jid = job_id.clone();
+        tokio::spawn(async move {
+            crate::metrics::JOB_STARTED_TOTAL.inc();
+            crate::metrics::RUNNING_JOBS.inc();
+            let _permit = semaphore.acquire().await.expect("semaphore 未关闭");
+            let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
+
+            let result = runner.run_job_with_cancel(request, cancel).await;
+
+            timer.observe_duration();
+            crate::metrics::JOB_FINISHED_TOTAL.inc();
+            crate::metrics::RUNNING_JOBS.dec();
+            if let Ok(ref res) = result {
+                if res.timed_out {
+                    crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+                }
+            }
+
+            let result = result.unwrap_or_else(|e| sandbox_core::job::JobResult {
+                job_id: jid.clone(),
+                status: sandbox_core::job::JobStatus::Error(e.to_string()),
+                exit_code: None,
+                signal: None,
+                stdout: Vec::new(),
+                stderr: e.to_string().into_bytes(),
+                duration: std::time::Duration::ZERO,
+                timed_out: false,
+                sandbox_violations: vec![],
+                resource_usage: None,
+            });
+            if let Some(entry) = jobs.write().expect("jobs 锁中毒").get_mut(&jid) {
+                entry.state = JobState::Done(result);
+            }
+        });
+
+        job_id
+    }
+
+    /// cr-018: 查询 job 状态/结果
+    pub fn get_job(&self, job_id: &str) -> Option<JobState> {
+        self.jobs
+            .read()
+            .expect("jobs 锁中毒")
+            .get(job_id)
+            .map(|e| e.state.clone())
+    }
+
+    /// cr-018: 取消 job
+    pub fn cancel_job(&self, job_id: &str) -> Result<(), CancelError> {
+        let jobs = self.jobs.read().expect("jobs 锁中毒");
+        match jobs.get(job_id) {
+            Some(e) if matches!(e.state, JobState::Running) => {
+                e.cancel.cancel();
+                Ok(())
+            }
+            Some(_) => Err(CancelError::AlreadyDone),
+            None => Err(CancelError::NotFound),
+        }
+    }
+
     /// 当前运行 job 数
     pub fn running_count(&self) -> usize {
         self.max_concurrent_jobs - self.semaphore.available_permits()
@@ -134,6 +241,9 @@ mod tests {
 
     use sandbox_core::profile::SandboxProfile;
     use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
+    use sandbox_core::job::JobRequest;
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     async fn make_runner(base: &Path) -> SandboxRunner {
         let config = SandboxConfig {
@@ -170,5 +280,90 @@ mod tests {
         assert!(scheduler
             .profile_names()
             .contains(&"my_task".to_string()));
+    }
+
+    // ==================== cr-018 阶段2: 异步 submit + cancel ====================
+
+    fn make_async_request(job_id: &str, argv: &[&str]) -> JobRequest {
+        JobRequest {
+            job_id: job_id.to_string(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            profile_name: "shell".to_string(),
+            timeout: Some(Duration::from_secs(10)),
+            custom_env: HashMap::new(),
+            stdin_data: None,
+        }
+    }
+
+    /// 轮询直到 job 进入终态或超时（测试辅助）
+    async fn wait_until_done(scheduler: &Scheduler, job_id: &str) -> Option<JobState> {
+        for _ in 0..50 {
+            if let Some(state) = scheduler.get_job(job_id) {
+                if matches!(state, JobState::Done(_)) {
+                    return Some(state);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        scheduler.get_job(job_id)
+    }
+
+    #[tokio::test]
+    async fn submit_async_注册任务_完成后get_job返回done() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let jid = scheduler
+            .submit_async(make_async_request("async-001", &["/bin/echo", "hello"]))
+            .await;
+        assert_eq!(jid, "async-001");
+        assert!(matches!(scheduler.get_job(&jid), Some(JobState::Running)));
+
+        let state = wait_until_done(&scheduler, &jid).await;
+        assert!(
+            matches!(state, Some(JobState::Done(_))),
+            "任务应完成 → Done，实际: {:?}",
+            state
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_job_停止运行中任务为cancelled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let jid = scheduler
+            .submit_async(make_async_request("cancel-001", &["/bin/sleep", "30"]))
+            .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        scheduler.cancel_job(&jid).expect("cancel 应成功");
+
+        let state = wait_until_done(&scheduler, &jid).await;
+        assert!(
+            matches!(
+                state,
+                Some(JobState::Done(ref r)) if matches!(r.status, sandbox_core::job::JobStatus::Cancelled)
+            ),
+            "cancel 后应 Done(Cancelled)，实际: {:?}",
+            state
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_job_已完成返回alreadydone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let jid = scheduler
+            .submit_async(make_async_request("done-001", &["/bin/echo", "x"]))
+            .await;
+        wait_until_done(&scheduler, &jid).await;
+        assert!(matches!(
+            scheduler.cancel_job(&jid),
+            Err(CancelError::AlreadyDone)
+        ));
     }
 }

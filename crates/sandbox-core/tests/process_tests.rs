@@ -441,3 +441,31 @@ async fn 被信号杀死的任务_状态为killed() {
     );
     assert!(!result.timed_out, "自杀不应被记为超时");
 }
+
+// ==================== cr-018 阶段1: cancel token ====================
+
+#[tokio::test]
+async fn cancel_token_触发后任务被中止_status为cancelled() {
+    use tokio_util::sync::CancellationToken;
+
+    let (_tmp, runner) = create_test_runner().await;
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    // sleep 30 + timeout 1s；cancel 在 200ms 触发（远早于 timeout）
+    let mut req = make_request("cancel-001", &["/bin/sleep", "30"]);
+    req.timeout = Some(Duration::from_secs(1));
+
+    let handle = tokio::spawn(async move { runner.run_job_with_cancel(req, cancel_clone).await });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    cancel.cancel();
+
+    let result = handle.await.expect("task panic").expect("run_job 不应报错");
+
+    assert!(
+        matches!(result.status, JobStatus::Cancelled),
+        "cancel 触发后 status 应为 Cancelled，实际: {:?}",
+        result.status
+    );
+}

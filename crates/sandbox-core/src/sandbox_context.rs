@@ -48,8 +48,18 @@ impl SandboxRunner {
         })
     }
 
-    /// 执行单个 job。完整生命周期管理。
+    /// 执行单个 job。完整生命周期管理。（cr-018: 委托 run_job_with_cancel，cancel 永不触发）
     pub async fn run_job(&self, request: JobRequest) -> Result<JobResult, CoreError> {
+        self.run_job_with_cancel(request, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// cr-018: 带 cancel 的任务执行。cancel 触发时杀进程组（SIGTERM→SIGKILL），返回 Cancelled。
+    pub async fn run_job_with_cancel(
+        &self,
+        request: JobRequest,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<JobResult, CoreError> {
         let start = tokio::time::Instant::now();
 
         // 0. 磁盘水位检查
@@ -193,20 +203,25 @@ impl SandboxRunner {
             buf
         });
 
-        // 12. 等待子进程退出（带超时）
-        let (timed_out, exit_status) = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(Ok(status)) => (false, Some(status)),
-            Ok(Err(e)) => return Err(CoreError::Process(e.to_string())),
-            Err(_) => {
-                // 超时：先 SIGTERM 整个进程组
-                unsafe {
-                    libc::killpg(child_pid, libc::SIGTERM);
+        // 12. 等待子进程退出（超时 或 cancel，cr-018）
+        let (timed_out, cancelled, exit_status) = tokio::select! {
+            r = tokio::time::timeout(timeout, child.wait()) => match r {
+                Ok(Ok(status)) => (false, false, Some(status)),
+                Ok(Err(e)) => return Err(CoreError::Process(e.to_string())),
+                Err(_) => {
+                    // 超时：SIGTERM → 500ms → SIGKILL
+                    unsafe { libc::killpg(child_pid, libc::SIGTERM); }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let _ = child.kill().await;
+                    (true, false, child.wait().await.ok())
                 }
+            },
+            _ = cancel.cancelled() => {
+                // cr-018 cancel：SIGTERM → 500ms → SIGKILL（整组，无孤儿）
+                unsafe { libc::killpg(child_pid, libc::SIGTERM); }
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                // 仍然没退出则 SIGKILL
                 let _ = child.kill().await;
-                let status = child.wait().await.ok();
-                (true, status)
+                (false, true, child.wait().await.ok())
             }
         };
 
@@ -217,10 +232,13 @@ impl SandboxRunner {
         let stderr = stderr_handle.await.unwrap_or_default();
 
         // 14. 确定状态
+        // - cancel → Cancelled（cr-018，用户主动）
         // - 超时 → TimedOut
         // - 被信号杀死（如 seccomp SIGSYS 违规、外部信号）→ Killed
         // - 正常退出（含非零退出码）→ Completed
-        let status = if timed_out {
+        let status = if cancelled {
+            JobStatus::Cancelled
+        } else if timed_out {
             JobStatus::TimedOut
         } else if exit_status.as_ref().and_then(|s| s.signal()).is_some() {
             JobStatus::Killed
