@@ -17,13 +17,14 @@
 **Docker（推荐）**：
 
 ```bash
-docker build -t lv-sandbox:0.1.0 .
+# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.1.0 .）
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.1.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
   -v /safe/worker/sandboxes:/sandboxes:rw \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  lv-sandbox:0.1.0
+  ghcr.io/lv-agent/lv-sandbox:v0.1.0
 ```
 
 **或源码构建**（需 libseccomp-dev / libseccomp2）：

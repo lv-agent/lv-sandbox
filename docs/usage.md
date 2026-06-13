@@ -13,7 +13,16 @@
 
 ### Docker 部署（推荐）
 
-镜像内置 `libseccomp2` 运行时、非 root 用户（uid 10000）和默认配置，`docker run` 即用。
+镜像内置 `libseccomp2` 运行时、非 root 用户（uid 10000）和默认配置，`docker run` 即用。两种获取方式：
+
+**方式 A：从 ghcr.io 拉取（最快）**
+
+```bash
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.1.0
+docker tag ghcr.io/lv-agent/lv-sandbox:v0.1.0 lv-sandbox:0.1.0   # 可选，便于复用下方命令
+```
+
+**方式 B：本地构建**
 
 ```bash
 # 本地构建镜像
