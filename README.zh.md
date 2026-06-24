@@ -7,10 +7,12 @@
 ## 特性
 
 - **六重安全隔离**：Landlock（文件系统）+ seccomp（syscall）+ rlimit（资源）+ cgroup v2（内存/CPU/pids）+ 进程隔离（NoNewPrivs/setsid/fd 清理/env 白名单）+ 超时清理
-- **默认禁网**：seccomp 阻断所有网络 socket 系统调用，任务无法发起出站连接或开监听端口（基于黑名单；内核级 netns 隔离规划中——见[安全边界](docs/architecture.md#安全边界)）
+- **默认零出站，白名单受控出站可选**：seccomp 把 `socket()` 限制为仅 `AF_UNIX`，任务建不出任何 TCP/UDP socket；profile 可按白名单经 UDS SOCKS5 代理开启受控出站。零特权——见[网络隔离](docs/zh/network-isolation.md)
 - **并发执行**：一个 worker 同时跑上百个轻量任务，`Semaphore` 限流排队
 - **YAML 配置**：内置 `shell`/`python`/`node` profile，可自定义，支持热重载
-- **HTTP API**：提交任务、查询状态、列 profile、重载配置、Prometheus 指标
+- **异步任务 + 取消**：提交立即返回，轮询取结果，可取消运行中任务（SIGTERM → SIGKILL）
+- **HTTP API**：提交/查询/取消、列 profile、重载配置、Prometheus 指标
+- **输出脱敏与就绪**：`stdout`/`stderr` 返回前清洗密钥；`/health` 报告安全机制生效状态
 - **MCP 集成**：`sandbox-mcp` 网关对接 Claude Code / Hermes-Agent
 
 ## 快速开始
@@ -47,8 +49,12 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 
 ## 文档
 
-- 📐 [架构设计思路](docs/architecture.md) — 为什么这样设计、高层架构、安全边界
-- 📖 [使用指南](docs/usage.md) — 构建、HTTP API、MCP 集成、配置参考
+- 📐 [架构设计思路](docs/zh/architecture.md) — 为什么这样设计、高层架构、安全边界
+- 📖 [使用指南](docs/zh/usage.md) — 构建、运行、配置、教程
+- 🔌 [HTTP API 参考](docs/zh/api.md) — 端点、schema、状态码
+- 🛡️ [安全模型](docs/zh/security.md) — 威胁边界与部署加固
+- 🌐 [网络隔离](docs/zh/network-isolation.md) — 出站模型深度
+- 🇬🇧 English docs: [README](README.md) · [Architecture](docs/architecture.md) · [Usage](docs/usage.md) · [API](docs/api.md) · [Security](docs/security.md) · [Network](docs/network-isolation.md)
 
 ## License
 

@@ -74,7 +74,7 @@ Each task runs in its own process group, layered with six isolation mechanisms:
 | Mechanism | Effect |
 |---|---|
 | **Landlock** | restricts filesystem access — a task can only read/write its own workspace; **/proc is scoped** to its own `/proc/self` + global info (cpuinfo/meminfo), not other tasks' `/proc/<pid>` |
-| **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, …) **and all network socket syscalls — default no-network: tasks cannot make outbound connections, listen, or send/receive traffic** |
+| **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, io_uring, …) **and restricts `socket()` to `AF_UNIX` only — a task cannot create a TCP/UDP socket at all; controlled egress is opt-in via an allowlisted UDS SOCKS5 proxy** (see [network-isolation.md](network-isolation.md)) |
 | **rlimit** | caps process-level resources (CPU, file count, process count, file size) |
 | **cgroup v2** | caps real task resource use (memory, CPU, pids); degrades gracefully if unavailable |
 | **Process hardening** | NoNewPrivs disables privilege escalation, setsid detaches the controlling terminal, leaked fds closed, env allowlist |
@@ -97,9 +97,10 @@ refuse execution (fail-closed) or degrade and continue (fail-open).
 - Filling up the workspace (resource limits + alerts)
 - Spawning background processes to escape timeouts (whole-group cleanup)
 - Calling dangerous syscalls
-- **Making network connections** — all network socket syscalls are blocked by default (seccomp); tasks cannot phone home, reach the cloud metadata service (169.254.169.254), or open listeners
+- **Making network connections** — `socket(AF_INET, …)` is killed (seccomp); tasks cannot phone home, reach the cloud metadata service (169.254.169.254), or open listeners. Controlled, allowlisted egress is opt-in per profile via a UDS SOCKS5 proxy.
 - **Snooping other tasks via /proc** — /proc is scoped: a task can only read its own `/proc/self` + global info (cpuinfo/meminfo), not other tasks' `/proc/<pid>` (cmdline/maps/environ)
 - Inheriting the runner's secret env vars or leaked fds
+- **Leaking read secrets into agent context** — `stdout`/`stderr` are redacted before being returned (Bearer/AWS/GitHub tokens, PEM private keys)
 
 ### What it does NOT fully stop
 
@@ -107,28 +108,19 @@ Hardened malicious code exploiting kernel bugs, advanced container escape,
 strong multi-tenant isolation, all side channels. If the task source is fully
 untrusted and the bar is high, use MicroVM / gVisor / Kata / one-container-per-task.
 
-> **Network isolation today is a seccomp denylist, not a kernel-level cutoff.** It
-> blocks programs that go through the standard libc `socket()`/`connect()` path, but
-> a denylist is inherently not exhaustive. The stronger model — per-task network
-> namespace (no NIC) plus a UDS egress proxy with domain allowlist + traffic audit —
-> is planned (cr-017). For now, treat it as "default no-network for ordinary programs."
+> **Network isolation is enforced at `socket()` creation** — seccomp allows only
+> `AF_UNIX`, so a task cannot create a TCP/UDP socket at all (not a bypassable
+> denylist of high-level calls). Controlled egress is opt-in per profile through an
+> allowlisted UDS SOCKS5 proxy. Full details: [network-isolation.md](network-isolation.md).
 
-### Recommended deployment
+The full threat model (what's stopped, what isn't, `fail-closed` behavior, and the
+hardened deployment template) lives in [**security.md**](security.md).
 
-Wrap the worker in an outer container (a worker container, not a per-task
-container) for a boundary, and run sandbox-server as non-root inside it:
+---
 
-```bash
-docker run --rm \
-  --read-only \
-  --tmpfs /tmp:rw,nosuid,nodev,size=1g \
-  -v /safe/worker/sandboxes:/sandboxes:rw \
-  --cap-drop=ALL \
-  --security-opt=no-new-privileges \
-  --pids-limit=1000 --memory=4g --cpus=4 \
-  --user 10000:10000 \
-  your-worker-image
-```
+## Further documentation
 
-Rules: never `--privileged`, never mount the Docker socket or sensitive dirs,
-read-only rootfs, run non-root, tmpfs for `/tmp`, only `/sandboxes` writable.
+- [usage.md](usage.md) — build, run, configuration, tutorial
+- [api.md](api.md) — HTTP API reference (endpoints, schemas, status codes)
+- [security.md](security.md) — threat model & deployment hardening
+- [network-isolation.md](network-isolation.md) — egress model deep-dive

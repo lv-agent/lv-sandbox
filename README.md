@@ -28,21 +28,26 @@ a single worker — fast cold-start, low overhead, high throughput.
 
 > Built for **agent mistakes and casual escape attempts**. For fully untrusted,
 > high-assurance code, use MicroVM / gVisor / Kata. See
-> [Security boundary](docs/architecture.md#security-boundary).
+> [security.md](docs/security.md).
 
 ## Features
 
 - **Six-layer isolation** — Landlock (filesystem) + seccomp (syscalls) + rlimit
   (resources) + cgroup v2 (mem/CPU/pids) + process hardening (NoNewPrivs / setsid
   / fd cleanup / env allowlist) + timeout reaping
-- **Default no-network** — all network socket syscalls are blocked by seccomp; tasks
-  cannot make outbound connections or open listeners (denylist-based; kernel-level
-  netns isolation planned — see [Security boundary](docs/architecture.md#security-boundary))
+- **Zero-egress by default, allowlisted egress opt-in** — seccomp restricts
+  `socket()` to `AF_UNIX` only, so a task cannot create a TCP/UDP socket at all;
+  profiles can opt into controlled egress via an allowlisted UDS SOCKS5 proxy. No
+  extra privileges needed — see [network-isolation.md](docs/network-isolation.md)
 - **High concurrency** — one worker runs hundreds of lightweight tasks, bounded
   by a `Semaphore`
 - **YAML profiles** — built-in `shell` / `python` / `node`, fully customisable,
   hot-reloadable
-- **HTTP API** — submit, status, list profiles, reload, Prometheus metrics
+- **Async jobs + cancel** — submit returns immediately; poll for results; cancel
+  running tasks (SIGTERM → SIGKILL)
+- **HTTP API** — submit, status, cancel, list profiles, reload, Prometheus metrics
+- **Output redaction & readiness** — `stdout`/`stderr` scrubbed of secrets before
+  return; `/health` reports which security mechanisms are active
 - **MCP integration** — `sandbox-mcp` gateway for Claude Code / Hermes-Agent
 
 ## Quick start
@@ -80,8 +85,11 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 ## Documentation
 
 - 📐 [Architecture](docs/architecture.md) — the design bet, layers, security boundary
-- 📖 [Usage guide](docs/usage.md) — build, HTTP API, MCP integration, config reference
-- 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md)
+- 📖 [Usage guide](docs/usage.md) — build, run, config, tutorial
+- 🔌 [HTTP API reference](docs/api.md) — endpoints, schemas, status codes
+- 🛡️ [Security model](docs/security.md) — threat boundary & deployment hardening
+- 🌐 [Network isolation](docs/network-isolation.md) — egress model deep-dive
+- 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md) · [API](docs/zh/api.md) · [安全](docs/zh/security.md) · [网络隔离](docs/zh/network-isolation.md)
 
 ## Requirements
 
