@@ -39,6 +39,30 @@ async fn submit_job正常执行() {
     assert!(result["stdout"].as_str().unwrap().contains("hello"));
 }
 
+/// cr-018+#72: 提交带 stdin 的任务，子进程（cat）应读到 stdin 并输出
+#[tokio::test]
+async fn submit_job带stdin_任务能读到输入() {
+    let (_tmp, app) = create_test_app().await;
+    let (status, result) = submit_and_wait_with_input(
+        app,
+        "stdin-001",
+        &["/bin/cat"],
+        "shell",
+        "5s",
+        HashMap::new(),
+        Some("hello via stdin\n"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["status"].as_str().unwrap(), "Completed");
+    assert_eq!(
+        result["stdout"].as_str().unwrap(),
+        "hello via stdin\n",
+        "cat 应把 stdin 原样输出"
+    );
+}
+
 #[tokio::test]
 async fn submit_job_profile不存在进入error终态() {
     // cr-018 后 create_job 不再预校验 profile：submit_async 会注册任务，

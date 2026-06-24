@@ -113,6 +113,9 @@ Response:
 { "job_id": "demo-1", "status": "Running" }
 ```
 
+The request body also accepts an optional `stdin` field — UTF-8 text piped to the
+task's stdin (e.g. for `cat` or scripts that read input).
+
 Query the result:
 
 ```bash

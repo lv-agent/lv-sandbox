@@ -75,6 +75,8 @@ struct CreateJobRequest {
     profile_name: String,
     timeout: Option<String>,
     custom_env: Option<std::collections::HashMap<String, String>>,
+    /// cr-018+#72: 传递给子进程的 stdin（UTF-8 文本）
+    stdin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,7 +136,7 @@ async fn create_job(
         profile_name: req.profile_name,
         timeout,
         custom_env: req.custom_env.unwrap_or_default(),
-        stdin_data: None,
+        stdin_data: req.stdin.map(|s| s.into_bytes()),
     };
 
     let job_id = state.scheduler.submit_async(job_req).await;

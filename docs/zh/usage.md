@@ -105,6 +105,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 { "job_id": "demo-1", "status": "Running" }
 ```
 
+请求体还支持可选的 `stdin` 字段——UTF-8 文本，通过管道传给子进程 stdin（如 `cat` 或读取输入的脚本）。
+
 查询结果：
 
 ```bash

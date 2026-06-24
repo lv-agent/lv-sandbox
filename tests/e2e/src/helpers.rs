@@ -179,9 +179,7 @@ pub async fn send_and_parse<T: serde::de::DeserializeOwned>(
     (status, parsed)
 }
 
-/// cr-018: 提交并等待完成（POST /jobs + 轮询 GET /jobs/{id}）。
-/// 返回 (最终 HTTP 状态码, job JSON)。job JSON 在 Done 时含
-/// stdout/stderr/exit_code/status/duration_ms/timed_out 等字段。
+/// cr-018: 提交并等待完成（无 stdin）。委托 submit_and_wait_with_input。
 pub async fn submit_and_wait(
     app: Router,
     job_id: &str,
@@ -190,6 +188,20 @@ pub async fn submit_and_wait(
     timeout: &str,
     env: HashMap<String, String>,
 ) -> (axum::http::StatusCode, serde_json::Value) {
+    submit_and_wait_with_input(app, job_id, argv, profile, timeout, env, None).await
+}
+
+/// cr-018+#72: 提交并等待完成，可带 stdin（POST /jobs + 轮询 GET /jobs/{id}）。
+/// 返回 (最终 HTTP 状态码, job JSON)。Done 时含 stdout/stderr/exit_code 等。
+pub async fn submit_and_wait_with_input(
+    app: Router,
+    job_id: &str,
+    argv: &[&str],
+    profile: &str,
+    timeout: &str,
+    env: HashMap<String, String>,
+    stdin: Option<&str>,
+) -> (axum::http::StatusCode, serde_json::Value) {
     // POST /jobs（create）
     let body = serde_json::json!({
         "job_id": job_id,
@@ -197,6 +209,7 @@ pub async fn submit_and_wait(
         "profile_name": profile,
         "timeout": timeout,
         "custom_env": env,
+        "stdin": stdin,
     });
     let create_req = Request::builder()
         .method("POST")

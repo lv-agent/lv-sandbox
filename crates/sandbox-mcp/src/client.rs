@@ -42,6 +42,7 @@ impl SandboxHttpClient {
             "profile_name": params.profile,
             "timeout": params.timeout,
             "custom_env": params.env,
+            "stdin": params.stdin,
         });
         // POST /jobs（create，立即返回 job_id）
         let resp = self
