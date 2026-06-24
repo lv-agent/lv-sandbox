@@ -145,6 +145,13 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
 
 `status` values: `Completed`, `TimedOut`, `Killed`, `Cancelled`, `Error`.
 
+### Output redaction
+
+`stdout`/`stderr` in `GET /jobs/{id}` responses are redacted — common secret
+patterns (Bearer tokens, AWS `AKIA` keys, GitHub tokens, PEM private keys) are
+replaced with `[REDACTED]` before returning, so credentials a task accidentally
+reads (e.g. `~/.aws/credentials`) don't leak into the agent's context.
+
 ### Profiles
 
 Three built-in profiles, chosen per task at submit time:

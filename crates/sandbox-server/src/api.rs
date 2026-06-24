@@ -219,8 +219,12 @@ async fn get_job(
                 status: format!("{:?}", result.status),
                 exit_code: result.exit_code,
                 signal: result.signal,
-                stdout: Some(String::from_utf8_lossy(&result.stdout).to_string()),
-                stderr: Some(String::from_utf8_lossy(&result.stderr).to_string()),
+                stdout: Some(crate::redact::redact(
+                    &String::from_utf8_lossy(&result.stdout),
+                )),
+                stderr: Some(crate::redact::redact(
+                    &String::from_utf8_lossy(&result.stderr),
+                )),
                 duration_ms: Some(result.duration.as_millis() as u64),
                 timed_out: Some(result.timed_out),
             }),

@@ -136,6 +136,10 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
 
 `status` 可能值：`Completed`、`TimedOut`、`Killed`、`Cancelled`、`Error`。
 
+### 输出脱敏
+
+`GET /jobs/{id}` 响应中的 `stdout`/`stderr` 会被脱敏——常见密钥模式（Bearer token、AWS `AKIA` 密钥、GitHub token、PEM 私钥）在返回前替换为 `[REDACTED]`，避免任务误读的凭证（如 `~/.aws/credentials`）泄露进 agent 上下文。
+
 ### Profile
 
 内置三个 profile，按任务运行时选择：

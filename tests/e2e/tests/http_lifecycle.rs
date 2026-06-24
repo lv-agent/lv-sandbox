@@ -63,6 +63,32 @@ async fn submit_job带stdin_任务能读到输入() {
     );
 }
 
+/// cr-018+#78: 任务输出含敏感信息（Bearer token）应在 GET /jobs/{id} 被脱敏
+#[tokio::test]
+async fn 任务输出敏感信息被脱敏() {
+    let (_tmp, app) = create_test_app().await;
+    let (status, result) = submit_and_wait(
+        app,
+        "redact-001",
+        &[
+            "/bin/sh",
+            "-c",
+            "echo Authorization: Bearer secret123token",
+        ],
+        "shell",
+        "5s",
+        HashMap::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let stdout = result["stdout"].as_str().unwrap();
+    assert!(stdout.contains("REDACTED"), "Bearer 应脱敏: {stdout}");
+    assert!(
+        !stdout.contains("secret123token"),
+        "token 不应残留: {stdout}"
+    );
+}
+
 #[tokio::test]
 async fn submit_job_profile不存在进入error终态() {
     // cr-018 后 create_job 不再预校验 profile：submit_async 会注册任务，
