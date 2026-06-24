@@ -79,11 +79,35 @@ impl SandboxRunner {
 
         // 2. 构建 sanitized env
         let job_workspace = self.workspace_mgr.create_job_workspace(&request.job_id)?;
-        let env = build_sanitized_env(
+        let mut env = build_sanitized_env(
             &request.job_id,
             &job_workspace.root,
             &request.custom_env,
         );
+
+        // cr-019: 若 profile 有出站白名单,起 per-job SOCKS5h 代理(在 workspace 内 bind UDS)
+        let job_proxy = if !profile.egress_allowlist.is_empty() {
+            let matcher = crate::egress::AllowlistMatcher::new(profile.egress_allowlist.clone());
+            match crate::proxy::JobProxy::start(&job_workspace.workspace, matcher).await {
+                Ok((proxy, sock_path)) => {
+                    env.insert(
+                        "SANDBOX_PROXY_SOCK".to_string(),
+                        sock_path.to_string_lossy().to_string(),
+                    );
+                    Some(proxy)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        job_id = %request.job_id,
+                        error = %e,
+                        "代理启动失败,该 job 将零出站"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // 3. 准备安全上下文（编译 landlock/seccomp/cgroup）
         let mut prepared_ctx = PreparedSandboxContext::prepare(
@@ -249,6 +273,10 @@ impl SandboxRunner {
         // 15. 清理 cgroup + workspace
         if let Some(cg) = cgroup {
             let _ = cg.destroy();
+        }
+        // cr-019: 停止代理(cancel + 清理 socket 文件)
+        if let Some(proxy) = job_proxy {
+            proxy.stop().await;
         }
         let _ = self.workspace_mgr.cleanup_job(&request.job_id);
 
