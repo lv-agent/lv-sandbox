@@ -1,0 +1,5 @@
+#!/bin/sh
+# cr-019: sandbox 受控出站 shell 封装——委托 python helper(纯 stdlib)。
+# 用法: sandbox-curl <URL>
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "$HERE/../python/sandbox_net.py" GET "$1"
