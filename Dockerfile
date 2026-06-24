@@ -1,7 +1,7 @@
 # lv-sandbox 多阶段构建
 #   builder: rust:1-bookworm + libseccomp-dev 编译
 #   runtime: debian:bookworm-slim + libseccomp2 运行（非 root）
-# 构建命令: docker build -t lv-sandbox:0.1.0 .
+# 构建命令: docker build -t lv-sandbox:0.2.0 .
 
 # ---- builder：编译阶段（需要 libseccomp-dev 头文件 + pkg-config）----
 FROM rust:1-bookworm AS builder

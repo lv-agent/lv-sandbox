@@ -18,15 +18,15 @@
 **方式 A：从 ghcr.io 拉取（最快）**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.1.0
-docker tag ghcr.io/lv-agent/lv-sandbox:v0.1.0 lv-sandbox:0.1.0   # 可选，便于复用下方命令
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.0
+docker tag ghcr.io/lv-agent/lv-sandbox:v0.2.0 lv-sandbox:0.2.0   # 可选，便于复用下方命令
 ```
 
 **方式 B：本地构建**
 
 ```bash
 # 本地构建镜像
-docker build -t lv-sandbox:0.1.0 .
+docker build -t lv-sandbox:0.2.0 .
 
 # 或一条命令同时产出镜像 + 二进制 tar.gz（无 Docker 环境的兜底）
 bash scripts/build-release.sh
@@ -42,7 +42,7 @@ docker run -d --name sandbox \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 \
   --user 10000:10000 \
-  lv-sandbox:0.1.0
+  lv-sandbox:0.2.0
 ```
 
 要点：
