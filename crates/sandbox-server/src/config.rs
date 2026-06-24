@@ -113,6 +113,9 @@ pub struct ProfileConfig {
     pub max_stdout_mb: Option<u64>,
     pub max_stderr_mb: Option<u64>,
     pub default_timeout: Option<String>,
+    /// cr-019: 出站白名单。空/缺省 = 零出站。
+    #[serde(default)]
+    pub egress_allowlist: Option<Vec<sandbox_core::egress::EgressRule>>,
 }
 
 /// rlimit 配置（文件友好，使用人类可读单位）
@@ -215,6 +218,7 @@ impl ProfileConfig {
             default_timeout,
             fail_closed: sandbox_section.fail_closed,
             extra_readonly_paths,
+            egress_allowlist: self.egress_allowlist.clone().unwrap_or_default(),
         })
     }
 }

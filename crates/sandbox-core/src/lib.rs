@@ -6,6 +6,7 @@
 //! 定义完整的沙箱上下文和 job 生命周期。
 
 pub mod capability;
+pub mod egress;
 pub mod env;
 pub mod error;
 pub mod fd;
@@ -23,6 +24,7 @@ pub use sandbox_landlock as landlock;
 pub use sandbox_seccomp as seccomp;
 
 pub use capability::CapabilityReport;
+pub use egress::{AllowlistMatcher, EgressRule};
 pub use error::CoreError;
 pub use job::{JobRequest, JobResult, JobStatus, ResourceSummary, SandboxViolation};
 pub use process::{PreExecError, PreparedSandboxContext};

@@ -147,6 +147,7 @@ fn profile_config转换为sandbox_profile_默认值填充() {
         max_stdout_mb: None,
         max_stderr_mb: None,
         default_timeout: None,
+        egress_allowlist: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -182,6 +183,7 @@ fn profile_config转换_自定义值覆盖默认() {
         max_stdout_mb: Some(20),
         max_stderr_mb: Some(15),
         default_timeout: Some("60s".to_string()),
+        egress_allowlist: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();

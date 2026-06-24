@@ -29,6 +29,8 @@ pub struct SandboxProfile {
     pub fail_closed: bool,
     /// 额外的共享只读路径（包目录、离线 wheel 等）
     pub extra_readonly_paths: Vec<PathBuf>,
+    /// cr-019: 出站白名单。空 = 零出站(默认)。
+    pub egress_allowlist: Vec<crate::egress::EgressRule>,
 }
 
 impl SandboxProfile {
@@ -63,6 +65,7 @@ impl SandboxProfile {
             max_stderr_bytes: 5 * 1024 * 1024,
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
+            egress_allowlist: vec![],
         }
     }
 
@@ -92,6 +95,7 @@ impl SandboxProfile {
             max_stderr_bytes: 5 * 1024 * 1024,
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
+            egress_allowlist: vec![],
         }
     }
 
@@ -121,6 +125,7 @@ impl SandboxProfile {
             max_stderr_bytes: 5 * 1024 * 1024,
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
+            egress_allowlist: vec![],
         }
     }
 }
