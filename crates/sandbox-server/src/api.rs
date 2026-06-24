@@ -609,4 +609,65 @@ profiles:
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["success"], false);
     }
+
+    /// cr-018: GET /jobs/{不存在} → 404
+    #[tokio::test]
+    async fn get_job_不存在返回404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/jobs/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// cr-018: POST /jobs/{不存在}/cancel → 404
+    #[tokio::test]
+    async fn cancel_job_不存在返回404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs/nonexistent/cancel")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// cr-018+#77: dry-run profile 不存在 → 404
+    #[tokio::test]
+    async fn dry_run_profile不存在返回404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let body = serde_json::json!({
+            "job_id": "d",
+            "argv": ["/bin/echo", "x"],
+            "profile_name": "nonexistent",
+            "dry_run": true,
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
