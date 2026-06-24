@@ -88,7 +88,7 @@ Config lookup order: `--config` arg > `SANDBOX_CONFIG` env > `/etc/sandbox-serve
 | `GET` | `/api/v1/profiles` | list available profiles |
 | `POST` | `/api/v1/reload` | hot-reload config (update profiles without restart) |
 | `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/health` | health check |
+| `GET` | `/health` | readiness — landlock/cgroup/seccomp status + disk watermark |
 
 ### Submit a task (async)
 

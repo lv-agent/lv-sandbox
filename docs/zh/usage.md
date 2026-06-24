@@ -81,7 +81,7 @@ cargo build --workspace --release
 | `GET` | `/api/v1/profiles` | 列出所有可用 profile |
 | `POST` | `/api/v1/reload` | 热重载配置（无需重启更新 profile） |
 | `GET` | `/metrics` | Prometheus 指标 |
-| `GET` | `/health` | 健康检查 |
+| `GET` | `/health` | 就绪检查——landlock/cgroup/seccomp 状态 + 磁盘水位 |
 
 ### 提交任务（异步）
 

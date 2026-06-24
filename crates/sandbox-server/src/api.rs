@@ -43,8 +43,49 @@ pub fn app(state: AppState) -> Router {
 
 // ==================== Handlers ====================
 
-async fn health() -> &'static str {
-    "ok"
+/// cr-018+#76: /health 报告安全机制就绪等级（landlock/cgroup/seccomp + 磁盘水位）
+#[derive(Debug, Serialize)]
+struct HealthReport {
+    status: String,
+    landlock: LandlockHealth,
+    cgroup: CgroupHealth,
+    seccomp: bool,
+    disk_watermark_ok: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct LandlockHealth {
+    supported: bool,
+    abi_version: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct CgroupHealth {
+    available: bool,
+    controllers: Vec<String>,
+}
+
+async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let ws = state.scheduler.worker_status();
+    Json(HealthReport {
+        status: "ok".into(),
+        landlock: LandlockHealth {
+            supported: ws.capability_report.landlock.supported,
+            abi_version: ws.capability_report.landlock.abi_version,
+        },
+        cgroup: CgroupHealth {
+            available: ws.capability_report.cgroup.available,
+            controllers: ws
+                .capability_report
+                .cgroup
+                .controllers
+                .iter()
+                .map(|c| format!("{c:?}"))
+                .collect(),
+        },
+        seccomp: ws.capability_report.seccomp_available,
+        disk_watermark_ok: ws.disk_watermark_ok,
+    })
 }
 
 /// Prometheus 指标端点
@@ -357,6 +398,33 @@ mod tests {
             .collect::<Vec<_>>();
         profiles.sort();
         assert_eq!(profiles, vec!["node", "python", "shell"]);
+    }
+
+    /// cr-018+#76: /health 报告安全机制就绪等级（landlock/cgroup/seccomp）
+    #[tokio::test]
+    async fn health_报告安全机制就绪等级() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert!(json["landlock"]["supported"].is_boolean());
+        assert!(json["landlock"]["abi_version"].is_number());
+        assert!(json["cgroup"]["available"].is_boolean());
+        assert!(json["cgroup"]["controllers"].is_array());
+        assert!(json["seccomp"].is_boolean());
     }
 
     #[tokio::test]
