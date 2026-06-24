@@ -113,8 +113,11 @@ Response:
 { "job_id": "demo-1", "status": "Running" }
 ```
 
-The request body also accepts an optional `stdin` field — UTF-8 text piped to the
-task's stdin (e.g. for `cat` or scripts that read input).
+The request body also accepts optional fields:
+- `stdin` — UTF-8 text piped to the task's stdin (for `cat` or scripts that read input)
+- `dry_run: true` — validate without executing; returns the profile's limits
+  (timeout, landlock, max stdout, fail_closed) instead of running. Useful for
+  CI or previewing which restrictions apply.
 
 Query the result:
 

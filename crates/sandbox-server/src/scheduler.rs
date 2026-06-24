@@ -216,6 +216,12 @@ impl Scheduler {
         runner.profile_registry().names()
     }
 
+    /// cr-018+#77: 查询某个 profile（dry-run 用，返回克隆）
+    pub fn get_profile(&self, name: &str) -> Option<sandbox_core::profile::SandboxProfile> {
+        let runner = self.runner.read().expect("runner 锁中毒");
+        runner.profile_registry().get(name).cloned()
+    }
+
     /// Worker 状态
     pub fn worker_status(&self) -> WorkerStatus {
         let runner = self.runner.read().expect("runner 锁中毒");

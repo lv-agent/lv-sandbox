@@ -310,14 +310,23 @@ pub async fn build_runner_from_config(
     let config = AppConfig::load_from_path(path)?;
     let sandbox_config = config.to_sandbox_config();
     let mut runner = sandbox_core::sandbox_context::SandboxRunner::new(&sandbox_config).await?;
+    // cr-018+#77: 严格校验——任一 profile 无效则整体失败（fail-closed），
+    // 避免配错被静默跳过导致生产 profile 缺失
+    let mut errors = Vec::new();
     for (name, pc) in &config.profiles {
         match pc.to_profile(name, &config.sandbox) {
             Ok(profile) => {
                 tracing::info!(profile = %name, "注册 profile");
                 runner.register_profile(profile);
             }
-            Err(e) => tracing::warn!(profile = %name, error = %e, "profile 配置无效，跳过"),
+            Err(e) => {
+                tracing::warn!(profile = %name, error = %e, "profile 配置无效");
+                errors.push(format!("{name}: {e}"));
+            }
         }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!("profile 配置无效，拒绝加载: {}", errors.join("; "));
     }
     let profiles = runner.profile_registry().names();
     Ok((runner, profiles))

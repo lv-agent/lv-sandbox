@@ -118,6 +118,19 @@ struct CreateJobRequest {
     custom_env: Option<std::collections::HashMap<String, String>>,
     /// cr-018+#72: 传递给子进程的 stdin（UTF-8 文本）
     stdin: Option<String>,
+    /// cr-018+#77: dry-run 模式，只返回 profile 摘要不执行
+    dry_run: Option<bool>,
+}
+
+/// cr-018+#77: dry-run 响应——展示 profile 将应用哪些限制（不执行）
+#[derive(Debug, Serialize)]
+struct DryRunSummary {
+    profile: String,
+    dry_run: bool,
+    default_timeout_secs: u64,
+    max_stdout_mb: u64,
+    landlock: String,
+    fail_closed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,6 +168,31 @@ async fn create_job(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateJobRequest>,
 ) -> impl IntoResponse {
+    // cr-018+#77: dry-run 模式——返回 profile 摘要，不执行任务
+    if req.dry_run.unwrap_or(false) {
+        return match state.scheduler.get_profile(&req.profile_name) {
+            Some(profile) => (
+                StatusCode::OK,
+                Json(DryRunSummary {
+                    profile: profile.name.clone(),
+                    dry_run: true,
+                    default_timeout_secs: profile.default_timeout.as_secs(),
+                    max_stdout_mb: profile.max_stdout_bytes / 1024 / 1024,
+                    landlock: format!("{:?}", profile.landlock_template),
+                    fail_closed: profile.fail_closed,
+                }),
+            )
+                .into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("profile 不存在: {}", req.profile_name),
+                }),
+            )
+                .into_response(),
+        };
+    }
+
     let timeout = match req.timeout.as_deref() {
         Some(t) => match parse_duration(t) {
             Some(d) => Some(d),
@@ -431,6 +469,39 @@ mod tests {
         assert!(json["seccomp"].is_boolean());
     }
 
+    /// cr-018+#77: dry-run 返回 profile 摘要，不执行任务
+    #[tokio::test]
+    async fn create_job_dry_run返回profile摘要不执行() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let body = serde_json::json!({
+            "job_id": "dry-1",
+            "argv": ["/bin/echo", "x"],
+            "profile_name": "shell",
+            "dry_run": true,
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["dry_run"], true);
+        assert_eq!(json["profile"], "shell");
+        assert!(json["default_timeout_secs"].as_u64().is_some());
+        assert!(json["landlock"].as_str().unwrap().contains("Shell"));
+    }
+
     #[tokio::test]
     async fn reload_重新加载配置返回新profile列表() {
         let tmp = tempfile::tempdir().unwrap();
@@ -489,5 +560,53 @@ profiles:
             "reload 后应包含 custom_task, 实际: {:?}",
             profiles
         );
+    }
+
+    /// cr-018+#77: reload 时 profile 无效（timeout 格式错）应失败，不静默跳过
+    #[tokio::test]
+    async fn reload_无效profile配置返回失败() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("bad.yaml");
+        let yaml = r#"
+sandbox:
+  base_dir: "/tmp/sandbox-test-bad"
+profiles:
+  bad_task:
+    default_timeout: "not-a-duration"
+"#;
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let runner = SandboxRunner::new(&SandboxConfig {
+            sandbox_base_dir: tmp.path().join("s"),
+            disk_watermark_bytes: 0,
+        })
+        .await
+        .unwrap();
+        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let app = app(AppState {
+            scheduler,
+            config_path: config_path.clone(),
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/reload")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "无效 profile 应导致 reload 失败"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["success"], false);
     }
 }

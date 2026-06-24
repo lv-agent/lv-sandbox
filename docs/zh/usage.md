@@ -105,7 +105,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 { "job_id": "demo-1", "status": "Running" }
 ```
 
-请求体还支持可选的 `stdin` 字段——UTF-8 文本，通过管道传给子进程 stdin（如 `cat` 或读取输入的脚本）。
+请求体还支持可选字段：
+- `stdin`——UTF-8 文本，通过管道传给子进程 stdin（如 `cat` 或读取输入的脚本）
+- `dry_run: true`——只校验不执行；返回 profile 的限制（timeout、landlock、max stdout、fail_closed）而非运行任务。适合 CI 验证或预览将应用哪些限制。
 
 查询结果：
 
