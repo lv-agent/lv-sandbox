@@ -16,6 +16,24 @@ using kernel security primitives instead of a full container per task. Light,
 fast, high-concurrency — strong enough to contain agent mistakes and casual
 privilege-escalation attempts.
 
+## Status
+
+> **v0.2.0 — early, not security-audited.** lv-sandbox is a young open-source
+> project with no external security audit. Decide fit using the threat model in
+> [security.md](docs/security.md).
+
+**Who it's for** — running AI-agent-generated commands where you want
+kernel-level blast-radius control *without* a container per task; single-tenant
+or trusted-tenant workers on Linux ≥ 5.13 (Landlock); teams whose bar is
+"contain agent mistakes and casual escalation."
+
+**Who it's NOT for** — fully untrusted or hostile code, multi-tenant hostile
+workloads, or high-assurance production. Use **gVisor / Kata / Firecracker
+(MicroVM) / one-container-per-task** instead.
+
+lv-sandbox layers Landlock + seccomp + cgroup inside **one** worker —
+defense-in-depth for agent workloads, not a hard sandbox against kernel exploits.
+
 ## Why
 
 | Traditional | lv-sandbox |

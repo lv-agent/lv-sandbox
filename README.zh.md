@@ -4,6 +4,21 @@
 
 为 AI Agent（Claude Code、Hermes-Agent 等）提供安全的命令执行环境。每个任务在独立进程组中运行，叠加 Landlock + seccomp + rlimit + cgroup 多重隔离。
 
+## 状态
+
+> **v0.2.0 —— 早期版本,未做外部安全审计。** lv-sandbox 是一个年轻的开源项目,
+> 尚未经过外部安全审计。请对照 [security.md](docs/security.md) 的威胁模型判断是否适用。
+
+**适用** —— 运行 AI Agent 生成的命令,需要内核级失败半径控制又不想"一任务一容器";
+单租户或可信租户 worker;Linux ≥ 5.13(Landlock);以"控制 Agent 误操作与一般越权"
+为目标的团队。
+
+**不适用** —— 完全不可信或敌意代码、多租户敌对负载、高保障生产环境。请改用
+**gVisor / Kata / Firecracker(MicroVM)/ 一任务一容器**。
+
+lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是 Agent 工作负载
+的纵深防御,不是对抗内核漏洞利用的硬沙箱。
+
 ## 特性
 
 - **六重安全隔离**：Landlock（文件系统）+ seccomp（syscall）+ rlimit（资源）+ cgroup v2（内存/CPU/pids）+ 进程隔离（NoNewPrivs/setsid/fd 清理/env 白名单）+ 超时清理
