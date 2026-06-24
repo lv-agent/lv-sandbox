@@ -181,35 +181,42 @@ fn prepared_filter_多条denylist规则() {
 
 // ==================== cr-016: 默认禁网 ====================
 
-/// 单元：deny_network() 应加入 17 条网络 socket 规则（Socketpair 保留不 deny）
+/// 单元：deny_network() 只加一条 socket 条件规则（cr-019：AF_UNIX-only）。
+/// socket(domain != AF_UNIX) → KILL；其余 socket API 放行（AF_UNIX fd 上的操作）。
 #[test]
-fn deny_network_包含全部网络syscall() {
+fn deny_network_只禁socket且放行其余socket_api() {
     let profile = SeccompProfile::denylist().deny_network();
-    assert_eq!(profile.rules().len(), 17, "deny_network 应加入 17 条网络规则");
+    assert_eq!(profile.rules().len(), 1, "deny_network 应只加一条 socket 规则");
 
-    // 逐一验证关键网络 syscall 在规则中
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Socket));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Connect));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Bind));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Listen));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Accept));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Accept4));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Sendto));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Recvfrom));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Sendmsg));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Recvmsg));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Getsockopt));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Setsockopt));
-    // Socketpair 明确不 deny（保留本地 IPC）
+    let rule = &profile.rules()[0];
+    assert_eq!(rule.syscall, Syscall::Socket);
+    assert!(matches!(rule.action, SeccompAction::KillProcess));
+    assert_eq!(rule.conditions.len(), 1, "socket 规则应带 AF_UNIX 条件");
+
+    // 其余网络 socket API 不在 deny 列表（放行，作用于 AF_UNIX fd）
+    for sc in [
+        Syscall::Connect, Syscall::Bind, Syscall::Listen,
+        Syscall::Accept, Syscall::Sendto,
+    ] {
+        assert!(!profile.rules().iter().any(|r| r.syscall == sc), "{:?} 不应被 deny", sc);
+    }
+    // Socketpair 仍不 deny（本地 IPC）
     assert!(!profile.rules().iter().any(|r| r.syscall == Syscall::Socketpair));
 }
 
-/// 单元：default_denylist() 应自动包含网络 deny
+/// 单元：default_denylist() 应包含 socket 的 AF_UNIX 条件规则（cr-019）
 #[test]
 fn default_denylist_默认包含网络deny() {
     let profile = SeccompProfile::default_denylist();
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Socket));
-    assert!(profile.rules().iter().any(|r| r.syscall == Syscall::Connect));
+    let socket_rule = profile.rules().iter().find(|r| r.syscall == Syscall::Socket);
+    assert!(socket_rule.is_some(), "default_denylist 应包含 socket 规则");
+    assert_eq!(
+        socket_rule.unwrap().conditions.len(),
+        1,
+        "socket 应带 AF_UNIX 条件"
+    );
+    // connect 等不再 deny（AF_UNIX fd 上的操作放行）
+    assert!(!profile.rules().iter().any(|r| r.syscall == Syscall::Connect));
 }
 
 /// 回归保护：默认禁网不应影响正常本地命令（echo）

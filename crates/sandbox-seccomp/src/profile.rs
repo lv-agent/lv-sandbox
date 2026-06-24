@@ -133,35 +133,25 @@ impl SeccompProfile {
         self
     }
 
-    /// 拒绝所有网络 socket API（cr-016 默认禁网基线）。
-    /// 保留 socketpair/pipe/epoll 等本地 IPC 与事件机制（它们不联网）。
+    /// 拒绝一切非 AF_UNIX 的网络（cr-019：AF_UNIX-only 受控出口基线）。
+    ///
+    /// 只对 `socket(domain != AF_UNIX)` KILL——任务物理上建不出 INET/RAW socket，
+    /// 只能建 UDS。其余 socket API（connect/bind/send/...）放行：它们只能作用于
+    /// 任务自建的 AF_UNIX fd，叠加 pre_exec 的 close_fds 杜绝继承来的 INET fd。
+    ///
+    /// 强制点必须在 socket() 创建处：经典 seccomp 无法解引用 sockaddr 指针，
+    /// 故不能按目标地址过滤 connect()。堵住 INET fd 的诞生即足够。
     pub fn deny_network(mut self) -> Self {
-        let net_syscalls = [
-            Syscall::Socket,
-            Syscall::Connect,
-            Syscall::Bind,
-            Syscall::Listen,
-            Syscall::Accept,
-            Syscall::Accept4,
-            Syscall::Sendto,
-            Syscall::Recvfrom,
-            Syscall::Sendmsg,
-            Syscall::Recvmsg,
-            Syscall::Sendmmsg,
-            Syscall::Recvmmsg,
-            Syscall::Getsockopt,
-            Syscall::Setsockopt,
-            Syscall::Shutdown,
-            Syscall::Getsockname,
-            Syscall::Getpeername,
-        ];
-        for sc in net_syscalls {
-            self.rules.push(SeccompRule {
-                syscall: sc,
-                action: SeccompAction::KillProcess,
-                conditions: Vec::new(),
-            });
-        }
+        self.rules.push(SeccompRule {
+            syscall: Syscall::Socket,
+            action: SeccompAction::KillProcess,
+            conditions: vec![SeccompCondition {
+                arg_index: 0,
+                operator: CompareOperator::NotEqual,
+                value: libc::AF_UNIX as u64,
+                mask: None,
+            }],
+        });
         self
     }
 
@@ -183,5 +173,47 @@ impl SeccompProfile {
     /// 获取所有规则
     pub fn rules(&self) -> &[SeccompRule] {
         &self.rules
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syscall::Syscall;
+
+    /// cr-019: deny_network 只对 socket(domain != AF_UNIX) KILL,其余 socket API 放行
+    #[test]
+    fn deny_network_只禁非_af_unix_socket() {
+        let p = SeccompProfile::default_denylist();
+
+        // 找 socket 规则
+        let socket_rules: Vec<&SeccompRule> =
+            p.rules().iter().filter(|r| r.syscall == Syscall::Socket).collect();
+        assert_eq!(socket_rules.len(), 1, "socket 应只有一条规则");
+        assert!(matches!(socket_rules[0].action, SeccompAction::KillProcess));
+        assert_eq!(socket_rules[0].conditions.len(), 1, "socket 规则应带一个条件");
+        let cond = &socket_rules[0].conditions[0];
+        assert_eq!(cond.arg_index, 0, "条件应作用于 arg0(domain)");
+        assert!(matches!(cond.operator, CompareOperator::NotEqual));
+        assert_eq!(cond.value, libc::AF_UNIX as u64, "应放行 AF_UNIX");
+
+        // 其余网络 socket API 不再出现在 deny 列表(即默认允许)
+        for sc in [
+            Syscall::Connect, Syscall::Bind, Syscall::Listen,
+            Syscall::Accept, Syscall::Accept4, Syscall::Sendto,
+            Syscall::Recvfrom, Syscall::Sendmsg, Syscall::Recvmsg,
+            Syscall::Sendmmsg, Syscall::Recvmmsg, Syscall::Getsockopt,
+            Syscall::Setsockopt, Syscall::Shutdown, Syscall::Getsockname,
+            Syscall::Getpeername,
+        ] {
+            assert!(
+                !p.rules().iter().any(|r| r.syscall == sc),
+                "{:?} 不应在 deny 列表中(AF_UNIX fd 上的操作应放行)",
+                sc
+            );
+        }
+
+        // socketpair 仍不在 deny 列表(本地 IPC)
+        assert!(!p.rules().iter().any(|r| r.syscall == Syscall::Socketpair));
     }
 }
