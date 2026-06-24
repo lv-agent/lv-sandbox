@@ -116,3 +116,77 @@ async fn python_helper经代理往返上游() {
         job
     );
 }
+
+/// cr-019 gap4: node helper 经代理往返 loopback 上游。
+///
+/// 注:本环境 node 装在 nvm,不在 sandbox 的 Node landlock 白名单
+/// (/usr/bin、/usr/lib/node_modules)内,无法作为"被沙箱化任务"运行。
+/// 故改用宿主 node 直接运行 helper,对真实的 per-job proxy(JobProxy)发请求,
+/// 验证 node helper 的 SOCKS5h+HTTP 客户端逻辑(代理代码与 python e2e 同一份)。
+#[tokio::test]
+async fn node_helper经代理往返上游() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::process::Command;
+
+    // node 不存在则跳过
+    if Command::new("node")
+        .arg("--version")
+        .output()
+        .await
+        .is_err()
+    {
+        eprintln!("跳过:环境无 node");
+        return;
+    }
+
+    // mock 上游
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = upstream.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = upstream.accept().await.unwrap();
+        let mut buf = [0u8; 128];
+        let _ = s.read(&mut buf).await;
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+            .await
+            .unwrap();
+    });
+
+    // 真实 per-job 代理(不经 server,直接用 JobProxy)
+    let tmp = tempfile::tempdir().unwrap();
+    let matcher = sandbox_core::egress::AllowlistMatcher::new(vec![
+        sandbox_core::egress::EgressRule {
+            host: "localhost".into(),
+            port: Some(port),
+        },
+    ]);
+    let (proxy, sock_path) =
+        sandbox_core::proxy::JobProxy::start(tmp.path(), matcher).await.unwrap();
+
+    let helper = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../helpers/node/sandbox-net.js");
+    let script = format!(
+        "const {{request}}=require('{h}'); request('GET','http://localhost:{p}/',null,null,(e,r)=>{{if(e){{console.error(e.message);process.exit(1)}}console.log(r.status)}})",
+        h = helper.display(),
+        p = port,
+    );
+
+    // 用 tokio::process(异步),否则 std 阻塞 output 会饿死单线程 runtime 里的代理 task
+    let output = Command::new("node")
+        .arg("-e")
+        .arg(&script)
+        .env("SANDBOX_PROXY_SOCK", sock_path.to_str().unwrap())
+        .output()
+        .await
+        .expect("执行 node 失败");
+
+    proxy.stop().await;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("200"),
+        "node helper 经代理应拿到 200,stdout={:?} stderr={:?}",
+        stdout,
+        stderr
+    );
+}
