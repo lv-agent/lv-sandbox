@@ -26,7 +26,7 @@ impl SandboxMcpServer {
     }
 
     /// 在安全沙箱中执行命令，返回 stdout/stderr/exit_code。
-    #[rmcp::tool(description = "在安全沙箱中执行命令（landlock+seccomp+cgroup 隔离）。返回 JSON：job_id, status, exit_code, stdout, stderr, timed_out。参数：argv(必填,命令数组), profile(shell/python/node,默认shell), timeout(如30s), env(环境变量), job_id(可选)")]
+    #[rmcp::tool(description = "Run a command in the sandbox (landlock+seccomp+cgroup isolation). Returns JSON: job_id, status, exit_code, stdout, stderr, timed_out. Args: argv (required, command array), profile (shell/python/node, default shell), timeout (e.g. 30s), env, job_id (optional)")]
     async fn sandbox_run(
         &self,
         params: Parameters<SandboxRunParams>,
@@ -36,21 +36,21 @@ impl SandboxMcpServer {
     }
 
     /// 列出所有可用的安全 profile。
-    #[rmcp::tool(description = "列出所有可用的安全 profile（shell/python/node 及自定义），无需参数")]
+    #[rmcp::tool(description = "List all available sandbox profiles (shell/python/node and custom). No arguments.")]
     async fn sandbox_profiles(&self) -> Result<String, String> {
         let info = self.http.get_profiles().await.map_err(|e| e.to_string())?;
         serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
     }
 
     /// 查询 worker 并发状态。
-    #[rmcp::tool(description = "查询 sandbox worker 状态：running_jobs, max_concurrent, uptime_secs，无需参数")]
+    #[rmcp::tool(description = "Query sandbox worker status: running_jobs, max_concurrent, uptime_secs. No arguments.")]
     async fn sandbox_status(&self) -> Result<String, String> {
         let info = self.http.get_status().await.map_err(|e| e.to_string())?;
         serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
     }
 
     /// 热重载 sandbox-server 配置文件。
-    #[rmcp::tool(description = "热重载 sandbox-server 的 YAML 配置（重新加载 profile）。可选参数 config_path")]
+    #[rmcp::tool(description = "Hot-reload sandbox-server's YAML config (reloads profiles). Optional arg: config_path")]
     async fn sandbox_reload(
         &self,
         params: Parameters<SandboxReloadParams>,
@@ -68,7 +68,7 @@ impl SandboxMcpServer {
 impl ServerHandler for SandboxMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "轻量级 Agent 沙箱 MCP 网关。使用 sandbox_run 执行命令，sandbox_profiles 查看可用 profile，sandbox_status 查询状态，sandbox_reload 热重载配置。",
+            "Lightweight agent sandbox MCP gateway. Use sandbox_run to run commands, sandbox_profiles to list profiles, sandbox_status to query status, sandbox_reload to hot-reload config.",
         )
     }
 }
@@ -97,7 +97,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_run_返回job结果json() {
+    async fn sandbox_run_returns_job_json() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/jobs"))
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_profiles_返回列表() {
+    async fn sandbox_profiles_returns_list() {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/profiles"))
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_status_返回状态() {
+    async fn sandbox_status_returns_state() {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/status"))
@@ -158,7 +158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_reload_返回profile列表() {
+    async fn sandbox_reload_returns_profiles() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/reload"))
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_run_server错误返回err() {
+    async fn sandbox_run_server_error_returns_err() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/submit"))
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn get_info_声明工具能力() {
+    fn get_info_declares_tools() {
         let http = SandboxHttpClient::new("http://127.0.0.1:0").unwrap();
         let srv = SandboxMcpServer::new(http);
         let info = srv.get_info();

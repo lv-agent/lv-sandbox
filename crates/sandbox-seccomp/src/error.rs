@@ -2,18 +2,18 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum SeccompError {
-    #[error("seccomp 不可用: {0}")]
+    #[error("seccomp unavailable: {0}")]
     Unavailable(String),
 
-    #[error("BPF filter 创建失败: {0}")]
+    #[error("BPF filter creation failed: {0}")]
     FilterCreate(String),
 
-    #[error("规则添加失败: {0}")]
+    #[error("failed to add rule: {0}")]
     RuleAdd(String),
 
-    #[error("filter 加载失败: {0}")]
+    #[error("filter load failed: {0}")]
     Load(String),
 
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -161,10 +161,10 @@ fn cg_write(cg_path: &Path, file: &str, value: &str) -> Result<(), CgroupError> 
     // 只在文件存在时写入（某些控制器可能不可用）
     if path.exists() {
         std::fs::write(&path, value).map_err(|e| {
-            CgroupError::ResourceWrite(format!("写入 {:?} 失败: {}", path, e))
+            CgroupError::ResourceWrite(format!("failed to write {:?}: {}", path, e))
         })?;
     } else {
-        tracing::debug!("跳过不存在的 cgroup 文件: {:?}", path);
+        tracing::debug!("skipping non-existent cgroup file: {:?}", path);
     }
     Ok(())
 }
@@ -176,7 +176,7 @@ fn cg_read_u64(cg_path: &Path, file: &str) -> Result<Option<u64>, CgroupError> {
         return Ok(None);
     }
     let content = std::fs::read_to_string(&path).map_err(|e| {
-        CgroupError::ReadFailed(format!("读取 {:?} 失败: {}", path, e))
+        CgroupError::ReadFailed(format!("failed to read {:?}: {}", path, e))
     })?;
     // 某些文件可能返回 "max" 等非数值
     Ok(content.trim().parse::<u64>().ok())

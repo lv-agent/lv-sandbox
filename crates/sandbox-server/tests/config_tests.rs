@@ -7,7 +7,7 @@ use std::io::Write as IoWrite;
 // ==================== 默认配置 ====================
 
 #[test]
-fn 默认配置_build_profile_registry包含三个内置profile() {
+fn default_config_build_profile_registry_contains_three_builtins() {
     let config = sandbox_server::config::AppConfig::default();
 
     // AppConfig::default() 的 profiles 字段为空（配置文件没有定义）
@@ -21,7 +21,7 @@ fn 默认配置_build_profile_registry包含三个内置profile() {
 }
 
 #[test]
-fn 默认配置server段值正确() {
+fn default_config_server_section_values_correct() {
     let config = sandbox_server::config::AppConfig::default();
 
     assert_eq!(config.server.listen_addr, "0.0.0.0:8080");
@@ -31,7 +31,7 @@ fn 默认配置server段值正确() {
 }
 
 #[test]
-fn 默认配置sandbox段值正确() {
+fn default_config_sandbox_section_values_correct() {
     let config = sandbox_server::config::AppConfig::default();
 
     assert_eq!(config.sandbox.base_dir, "/sandboxes");
@@ -43,7 +43,7 @@ fn 默认配置sandbox段值正确() {
 // ==================== YAML 解析 ====================
 
 #[test]
-fn 从yaml字符串解析_自定义server配置() {
+fn from_yaml_string_custom_server_config() {
     let yaml = r#"
 server:
   listen_addr: "127.0.0.1:9090"
@@ -57,7 +57,7 @@ sandbox:
 "#;
 
     let config: sandbox_server::config::AppConfig =
-        serde_yaml::from_str(yaml).expect("YAML 解析失败");
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
 
     assert_eq!(config.server.listen_addr, "127.0.0.1:9090");
     assert_eq!(config.server.max_concurrent_jobs, 50);
@@ -68,7 +68,7 @@ sandbox:
 }
 
 #[test]
-fn 从yaml字符串解析_自定义profile() {
+fn from_yaml_string_custom_profile() {
     let yaml = r#"
 server:
   listen_addr: "0.0.0.0:8080"
@@ -91,9 +91,9 @@ profiles:
 "#;
 
     let config: sandbox_server::config::AppConfig =
-        serde_yaml::from_str(yaml).expect("YAML 解析失败");
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
 
-    let python = config.profiles.get("python").expect("python profile 不存在");
+    let python = config.profiles.get("python").expect("python profile not found");
     assert_eq!(python.extra_readonly_paths.as_ref().unwrap().len(), 2);
     assert_eq!(
         python.extra_readonly_paths.as_ref().unwrap()[0],
@@ -102,14 +102,14 @@ profiles:
     assert_eq!(python.max_stdout_mb, Some(10));
     assert_eq!(python.default_timeout, Some("30s".to_string()));
 
-    let rlimit = python.rlimit.as_ref().expect("rlimit 不存在");
+    let rlimit = python.rlimit.as_ref().expect("rlimit not found");
     assert_eq!(rlimit.cpu_seconds, Some(5));
     assert_eq!(rlimit.nofile, Some(128));
     assert_eq!(rlimit.fsize_mb, Some(50));
 }
 
 #[test]
-fn 从yaml解析_最小配置_使用默认值() {
+fn from_yaml_minimal_config_uses_defaults() {
     // 只提供 server 和 sandbox 必要字段，profiles 使用默认
     let yaml = r#"
 server:
@@ -119,14 +119,14 @@ sandbox:
 "#;
 
     let config: sandbox_server::config::AppConfig =
-        serde_yaml::from_str(yaml).expect("YAML 解析失败");
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
 
     // profiles 应该为空（YAML 没有提供），但默认值字段应有值
     assert!(config.profiles.is_empty() || config.server.listen_addr == "0.0.0.0:8080");
 }
 
 #[test]
-fn 无效yaml返回错误() {
+fn invalid_yaml_returns_error() {
     let yaml = r#"
 server:
   listen_addr: [invalid
@@ -134,13 +134,13 @@ server:
 "#;
 
     let result = serde_yaml::from_str::<sandbox_server::config::AppConfig>(yaml);
-    assert!(result.is_err(), "无效 YAML 应该返回错误");
+    assert!(result.is_err(), "invalid YAML should return an error");
 }
 
 // ==================== ProfileConfig → SandboxProfile 转换 ====================
 
 #[test]
-fn profile_config转换为sandbox_profile_默认值填充() {
+fn profile_config_to_sandbox_profile_default_fill() {
     let profile_config = sandbox_server::config::ProfileConfig {
         rlimit: None,
         extra_readonly_paths: None,
@@ -154,7 +154,7 @@ fn profile_config转换为sandbox_profile_默认值填充() {
 
     let profile = profile_config
         .to_profile("shell", &sandbox_section)
-        .expect("转换失败");
+        .expect("conversion failed");
 
     assert_eq!(profile.name, "shell");
     // 默认 rlimit 值应该被填充
@@ -165,7 +165,7 @@ fn profile_config转换为sandbox_profile_默认值填充() {
 }
 
 #[test]
-fn profile_config转换_自定义值覆盖默认() {
+fn profile_config_to_custom_values_override_defaults() {
     let profile_config = sandbox_server::config::ProfileConfig {
         rlimit: Some(sandbox_server::config::RlimitFileConfig {
             cpu_seconds: Some(10),
@@ -190,7 +190,7 @@ fn profile_config转换_自定义值覆盖默认() {
 
     let profile = profile_config
         .to_profile("python", &sandbox_section)
-        .expect("转换失败");
+        .expect("conversion failed");
 
     assert_eq!(profile.name, "python");
     // rlimit 自定义值
@@ -208,7 +208,7 @@ fn profile_config转换_自定义值覆盖默认() {
 }
 
 #[test]
-fn rlimit_单位转换_mb到字节() {
+fn rlimit_unit_conversion_mb_to_bytes() {
     let rlimit_file = sandbox_server::config::RlimitFileConfig {
         cpu_seconds: Some(5),
         nofile: Some(64),
@@ -232,9 +232,9 @@ fn rlimit_单位转换_mb到字节() {
 // ==================== 文件加载 ====================
 
 #[test]
-fn 配置文件不存在_使用默认配置() {
+fn config_file_missing_uses_defaults() {
     let config = sandbox_server::config::AppConfig::load_from_path("/nonexistent/config.yaml")
-        .expect("加载应该成功");
+        .expect("load should succeed");
 
     // 回退到默认配置，profiles 字段为空，但 registry 有内置 profile
     assert!(config.profiles.is_empty());
@@ -245,8 +245,8 @@ fn 配置文件不存在_使用默认配置() {
 }
 
 #[test]
-fn 配置文件存在_正确加载() {
-    let dir = tempfile::tempdir().expect("创建临时目录失败");
+fn config_file_present_loads_correctly() {
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
     let config_path = dir.path().join("config.yaml");
 
     let yaml_content = r#"
@@ -269,11 +269,11 @@ profiles:
     max_stdout_mb: 1
 "#;
 
-    let mut f = std::fs::File::create(&config_path).expect("创建文件失败");
-    f.write_all(yaml_content.as_bytes()).expect("写入失败");
+    let mut f = std::fs::File::create(&config_path).expect("failed to create file");
+    f.write_all(yaml_content.as_bytes()).expect("write failed");
 
     let config = sandbox_server::config::AppConfig::load_from_path(&config_path)
-        .expect("加载失败");
+        .expect("load failed");
 
     assert_eq!(config.server.listen_addr, "127.0.0.1:3000");
     assert_eq!(config.server.max_concurrent_jobs, 200);
@@ -282,12 +282,12 @@ profiles:
     assert!(!config.sandbox.fail_closed);
 
     // profiles 中有 shell（来自 YAML）
-    let shell = config.profiles.get("shell").expect("shell profile 不存在");
+    let shell = config.profiles.get("shell").expect("shell profile not found");
     assert_eq!(shell.max_stdout_mb, Some(1));
 }
 
 #[test]
-fn disk_watermark_mb为零_表示禁用() {
+fn disk_watermark_mb_zero_means_disabled() {
     let yaml = r#"
 server:
   listen_addr: "0.0.0.0:8080"
@@ -297,7 +297,7 @@ sandbox:
 "#;
 
     let config: sandbox_server::config::AppConfig =
-        serde_yaml::from_str(yaml).expect("解析失败");
+        serde_yaml::from_str(yaml).expect("parse failed");
 
     assert_eq!(config.sandbox.disk_watermark_mb, 0);
 }
@@ -305,7 +305,7 @@ sandbox:
 // ==================== AppConfig → 运行时组件 ====================
 
 #[test]
-fn app_config转换为sandbox_config() {
+fn app_config_to_sandbox_config() {
     let config = sandbox_server::config::AppConfig::default();
 
     let sandbox_config = config.to_sandbox_config();
@@ -316,7 +316,7 @@ fn app_config转换为sandbox_config() {
 }
 
 #[test]
-fn app_config_disk_watermark为零_转换为零() {
+fn app_config_disk_watermark_zero_converts_to_zero() {
     let mut config = sandbox_server::config::AppConfig::default();
     config.sandbox.disk_watermark_mb = 0;
 
@@ -326,7 +326,7 @@ fn app_config_disk_watermark为零_转换为零() {
 }
 
 #[test]
-fn 自定义profile注册到_runner() {
+fn custom_profile_registered_to_runner() {
     let yaml = r#"
 server:
   listen_addr: "0.0.0.0:8080"
@@ -344,7 +344,7 @@ profiles:
 "#;
 
     let config: sandbox_server::config::AppConfig =
-        serde_yaml::from_str(yaml).expect("解析失败");
+        serde_yaml::from_str(yaml).expect("parse failed");
 
     let sandbox_section = &config.sandbox;
 
@@ -352,12 +352,12 @@ profiles:
     let mut registry = sandbox_core::profile::ProfileRegistry::with_defaults();
 
     for (name, pc) in &config.profiles {
-        let profile = pc.to_profile(name, sandbox_section).expect("转换失败");
+        let profile = pc.to_profile(name, sandbox_section).expect("conversion failed");
         registry.register(profile);
     }
 
     // 自定义 profile 应该存在
-    let custom = registry.get("custom_task").expect("custom_task 不存在");
+    let custom = registry.get("custom_task").expect("custom_task not found");
     assert_eq!(custom.name, "custom_task");
     assert_eq!(custom.rlimit.cpu_seconds, Some(10));
     assert_eq!(custom.max_stdout_bytes, 20 * 1024 * 1024);

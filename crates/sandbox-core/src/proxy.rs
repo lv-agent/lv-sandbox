@@ -27,12 +27,12 @@ pub async fn run_job_proxy(
                     let m = matcher.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_conn(stream, m).await {
-                            tracing::debug!(error = %e, "socks5 连接结束");
+                            tracing::debug!(error = %e, "socks5 connection ended");
                         }
                     });
                 }
                 Err(e) => {
-                    tracing::debug!(error = %e, "proxy accept 退出");
+                    tracing::debug!(error = %e, "proxy accept exited");
                     break;
                 }
             }
@@ -90,7 +90,7 @@ async fn handle_conn(mut stream: UnixStream, matcher: AllowlistMatcher) -> std::
 
     // 3) allowlist 校验
     if !matcher.is_allowed(&host, port) {
-        tracing::info!(%host, %port, "出站被白名单拒绝");
+        tracing::info!(%host, %port, "egress denied by allowlist");
         reply(&mut stream, 0x02).await?;
         return Ok(());
     }
@@ -127,7 +127,7 @@ async fn handle_conn(mut stream: UnixStream, matcher: AllowlistMatcher) -> std::
 
     // 5) 成功 + 双向 relay
     reply(&mut stream, 0x00).await?;
-    tracing::info!(%host, %port, "出站已放行");
+    tracing::info!(%host, %port, "egress allowed");
     let _ = tokio::io::copy_bidirectional(&mut stream, &mut up).await;
     Ok(())
 }
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn 白名单内经代理往返loopback上游() {
+    async fn allowlisted_roundtrip_via_loopback_upstream() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
 
@@ -251,7 +251,7 @@ mod tests {
 
         let mut s = socks5h_connect(proxy_path.to_str().unwrap(), "localhost", upstream_port)
             .await
-            .expect("应连上白名单内上游");
+            .expect("should connect to allowlisted upstream");
         s.write_all(b"PING").await.unwrap();
         let mut buf = [0u8; 4];
         s.read_exact(&mut buf).await.unwrap();
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn 白名单外被拒绝() {
+    async fn non_allowlisted_denied() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![EgressRule {
@@ -286,18 +286,18 @@ mod tests {
     /// cr-019 gap1: JobProxy 不显式 stop 而 drop(模拟 pre_exec/spawn 失败早返回)时,
     /// Drop 应 cancel 代理 + 清理 socket 文件(否则 task + listener fd 泄漏)。
     #[tokio::test]
-    async fn jobproxy_drop时停止代理并清理socket() {
+    async fn jobproxy_drop_stops_proxy_and_cleans_socket() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().to_path_buf();
         let matcher = AllowlistMatcher::new(vec![]);
         let (proxy, sock_path) = JobProxy::start(&ws, matcher).await.unwrap();
-        assert!(sock_path.exists(), "启动后 socket 文件应存在");
+        assert!(sock_path.exists(), "socket file should exist after start");
 
         drop(proxy); // 不调 stop,直接 drop(模拟早返回路径)
 
         // Drop 同步执行 cancel + remove_file,socket 目录项应立即消失
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        assert!(!sock_path.exists(), "drop 后 socket 文件应被 Drop 清理");
+        assert!(!sock_path.exists(), "socket file should be removed by Drop");
     }
 
     /// 发 SOCKS5 请求(cmd + atyp + host + port),返回 reply 的 REP 码(第二字节)。
@@ -331,7 +331,7 @@ mod tests {
 
     /// cr-019 gap3:IPv4 字面量 ATYP 应被拒绝(强制 DOMAIN/远程 DNS)→ reply 0x02
     #[tokio::test]
-    async fn 代理拒绝ipv4字面量() {
+    async fn proxy_rejects_ipv4_literal() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![EgressRule {
@@ -346,7 +346,7 @@ mod tests {
         let rep = socks5_request_rep(proxy_path.to_str().unwrap(), 0x01, 0x01, "127.0.0.1", 80)
             .await
             .unwrap();
-        assert_eq!(rep, 0x02, "IPv4 字面量 ATYP 应被拒绝");
+        assert_eq!(rep, 0x02, "IPv4-literal ATYP should be rejected");
 
         cancel.cancel();
         let _ = task.await;
@@ -354,7 +354,7 @@ mod tests {
 
     /// cr-019 gap3:非 CONNECT 命令(如 BIND)应回 command not supported → reply 0x07
     #[tokio::test]
-    async fn 代理拒绝非connect命令() {
+    async fn proxy_rejects_non_connect() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![EgressRule {
@@ -369,7 +369,7 @@ mod tests {
         let rep = socks5_request_rep(proxy_path.to_str().unwrap(), 0x02, 0x03, "localhost", 80)
             .await
             .unwrap();
-        assert_eq!(rep, 0x07, "非 CONNECT 应回 command not supported");
+        assert_eq!(rep, 0x07, "non-CONNECT should return command not supported");
 
         cancel.cancel();
         let _ = task.await;
@@ -377,7 +377,7 @@ mod tests {
 
     /// cr-019 gap3:白名单内但上游无监听 → connection refused → reply 0x05
     #[tokio::test]
-    async fn 代理上游连接失败回refused() {
+    async fn proxy_upstream_refused_returns_refused() {
         // 取一个端口后立即 drop,保证它无人监听(loopback 上连空闲端口 → ECONNREFUSED)
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let closed_port = closed.local_addr().unwrap().port();
@@ -398,7 +398,7 @@ mod tests {
             socks5_request_rep(proxy_path.to_str().unwrap(), 0x01, 0x03, "localhost", closed_port)
                 .await
                 .unwrap();
-        assert_eq!(rep, 0x05, "上游连接失败应回 connection refused");
+        assert_eq!(rep, 0x05, "upstream connect failure should return connection refused");
 
         cancel.cancel();
         let _ = task.await;
@@ -420,7 +420,7 @@ mod tests {
 
     /// cr-019 malformed: 问候 VER 非 5 → 代理静默关闭(不回复),不挂。
     #[tokio::test]
-    async fn 畸形_bad_ver问候被静默关闭() {
+    async fn malformed_bad_ver_silently_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![]);
@@ -430,7 +430,7 @@ mod tests {
         let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
 
         let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x04, 0x01, 0x00]).await;
-        assert!(buf.is_empty(), "bad VER 应静默关闭,无回复,实际: {:?}", buf);
+        assert!(buf.is_empty(), "bad VER: silent close, no reply, actual: {:?}", buf);
 
         cancel.cancel();
         let _ = task.await;
@@ -438,7 +438,7 @@ mod tests {
 
     /// cr-019 malformed: 截断问候(只发 1 字节)→ 代理 read_exact 失败,不挂。
     #[tokio::test]
-    async fn 畸形_截断问候不挂() {
+    async fn malformed_truncated_greeting_no_hang() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![]);
@@ -448,7 +448,7 @@ mod tests {
         let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
 
         let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x05]).await;
-        assert!(buf.is_empty(), "截断问候应被 EOF 处理,无回复");
+        assert!(buf.is_empty(), "truncated greeting: handled via EOF, no reply");
 
         cancel.cancel();
         let _ = task.await;
@@ -456,7 +456,7 @@ mod tests {
 
     /// cr-019 malformed: 未知 ATYP → 回 general failure(reply 0x01)。
     #[tokio::test]
-    async fn 畸形_未知atyp回general_failure() {
+    async fn malformed_unknown_atyp_returns_general_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![EgressRule {
@@ -477,7 +477,7 @@ mod tests {
         // buf = 问候回复[5,0] + 错误回复[5,REP,...],REP 在 buf[3]
         assert!(
             buf.len() >= 4 && buf[3] == 0x01,
-            "未知 ATYP 应回 REP=0x01,实际: {:?}",
+            "unknown ATYP should return REP=0x01, actual: {:?}",
             buf
         );
 
@@ -487,7 +487,7 @@ mod tests {
 
     /// cr-019 malformed: DOMAIN 声明长度但字节不足 → read_exact EOF,不挂。
     #[tokio::test]
-    async fn 畸形_截断domain不挂() {
+    async fn malformed_truncated_domain_no_hang() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![EgressRule {
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(
             buf,
             vec![0x05, 0x00],
-            "截断 DOMAIN 应只有问候回复,无连接回复,实际: {:?}",
+            "truncated DOMAIN: only greeting reply, no connect reply, actual: {:?}",
             buf
         );
 
@@ -519,7 +519,7 @@ mod tests {
 
     /// cr-019 malformed: 超大 NMETHODS(255)但字节不足 → read_exact EOF,不挂、不 OOM。
     #[tokio::test]
-    async fn 畸形_超大nmethods不挂() {
+    async fn malformed_oversized_nmethods_no_hang() {
         let tmp = tempfile::tempdir().unwrap();
         let proxy_path = tmp.path().join(".proxy.sock");
         let matcher = AllowlistMatcher::new(vec![]);
@@ -530,7 +530,7 @@ mod tests {
 
         // 问候 VER=5, NMETHODS=255, 但不给 methods 字节
         let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x05, 0xff]).await;
-        assert!(buf.is_empty(), "超大 NMETHODS 截断应被 EOF 处理,无回复");
+        assert!(buf.is_empty(), "oversized NMETHODS truncation: handled via EOF, no reply");
 
         cancel.cancel();
         let _ = task.await;

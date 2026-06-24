@@ -180,7 +180,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_返回所有已注册profile名() {
+    fn names_returns_all_registered() {
         let registry = ProfileRegistry::with_defaults();
         let mut names = registry.names();
         names.sort();
@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn names_空注册表返回空() {
+    fn names_empty_registry_returns_empty() {
         let registry = ProfileRegistry::new();
         assert!(registry.names().is_empty());
     }

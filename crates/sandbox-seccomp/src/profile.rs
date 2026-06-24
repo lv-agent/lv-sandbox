@@ -183,19 +183,19 @@ mod tests {
 
     /// cr-019: deny_network 只对 socket(domain != AF_UNIX) KILL,其余 socket API 放行
     #[test]
-    fn deny_network_只禁非_af_unix_socket() {
+    fn deny_network_blocks_only_non_af_unix_socket() {
         let p = SeccompProfile::default_denylist();
 
         // 找 socket 规则
         let socket_rules: Vec<&SeccompRule> =
             p.rules().iter().filter(|r| r.syscall == Syscall::Socket).collect();
-        assert_eq!(socket_rules.len(), 1, "socket 应只有一条规则");
+        assert_eq!(socket_rules.len(), 1, "socket should have one rule");
         assert!(matches!(socket_rules[0].action, SeccompAction::KillProcess));
-        assert_eq!(socket_rules[0].conditions.len(), 1, "socket 规则应带一个条件");
+        assert_eq!(socket_rules[0].conditions.len(), 1, "socket rule should have one condition");
         let cond = &socket_rules[0].conditions[0];
-        assert_eq!(cond.arg_index, 0, "条件应作用于 arg0(domain)");
+        assert_eq!(cond.arg_index, 0, "condition should target arg0 (domain)");
         assert!(matches!(cond.operator, CompareOperator::NotEqual));
-        assert_eq!(cond.value, libc::AF_UNIX as u64, "应放行 AF_UNIX");
+        assert_eq!(cond.value, libc::AF_UNIX as u64, "should allow AF_UNIX");
 
         // 其余网络 socket API 不再出现在 deny 列表(即默认允许)
         for sc in [
@@ -208,7 +208,7 @@ mod tests {
         ] {
             assert!(
                 !p.rules().iter().any(|r| r.syscall == sc),
-                "{:?} 不应在 deny 列表中(AF_UNIX fd 上的操作应放行)",
+                "{:?} should not be in the deny list (operations on AF_UNIX fd should be allowed)",
                 sc
             );
         }

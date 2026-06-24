@@ -27,7 +27,7 @@ async fn timeout_returns_timed_out_via_http() {
 }
 
 #[tokio::test]
-async fn timeout前产生的stdout被捕获() {
+async fn stdout_before_timeout_is_captured() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,
@@ -43,12 +43,12 @@ async fn timeout前产生的stdout被捕获() {
     let stdout = result["stdout"].as_str().unwrap();
     assert!(
         stdout.contains("captured_output"),
-        "超时前的 stdout 应被捕获"
+        "stdout before timeout should be captured"
     );
 }
 
 #[tokio::test]
-async fn metrics端点返回prometheus格式() {
+async fn metrics_endpoint_returns_prometheus_format() {
     let (_tmp, app) = create_test_app().await;
     let response = app
         .oneshot(
@@ -72,7 +72,7 @@ async fn metrics端点返回prometheus格式() {
 }
 
 #[tokio::test]
-async fn 执行job后metrics_started_counter递增() {
+async fn metrics_started_counter_increments_after_job() {
     // 直接从 Prometheus 默认 registry 读取 baseline
     let baseline = prometheus_metric_value("sandbox_job_started_total");
 
@@ -92,14 +92,14 @@ async fn 执行job后metrics_started_counter递增() {
     let after = prometheus_metric_value("sandbox_job_started_total");
     assert!(
         after > baseline,
-        "started counter 应递增: before={}, after={}",
+        "started counter should increment: before={}, after={}",
         baseline,
         after
     );
 }
 
 #[tokio::test]
-async fn 超时job后metrics_timeout_counter递增() {
+async fn metrics_timeout_counter_increments_after_timeout_job() {
     let baseline = prometheus_metric_value("sandbox_job_timeout_total");
 
     let (_tmp, app) = create_test_app().await;
@@ -116,7 +116,7 @@ async fn 超时job后metrics_timeout_counter递增() {
     let after = prometheus_metric_value("sandbox_job_timeout_total");
     assert!(
         after > baseline,
-        "timeout counter 应递增: before={}, after={}",
+        "timeout counter should increment: before={}, after={}",
         baseline,
         after
     );

@@ -94,7 +94,7 @@ impl PreparedSandboxContext {
             }
         } else if profile.fail_closed {
             return Err(CoreError::SandboxInit(
-                "Landlock 不可用且 profile 要求 fail-closed".into(),
+                "Landlock unavailable and profile is fail-closed".into(),
             ));
         } else {
             None
@@ -127,13 +127,13 @@ impl PreparedSandboxContext {
                         if profile.fail_closed {
                             return Err(CoreError::Cgroup(e));
                         }
-                        tracing::warn!(job_id = %job_id, error = %e, "cgroup 创建失败，优雅降级");
+                        tracing::warn!(job_id = %job_id, error = %e, "cgroup creation failed, degrading");
                         None
                     }
                 }
             } else if profile.fail_closed {
                 return Err(CoreError::SandboxInit(
-                    "cgroup v2 不可用且 profile 要求 fail-closed".into(),
+                    "cgroup v2 unavailable and profile is fail-closed".into(),
                 ));
             } else {
                 None

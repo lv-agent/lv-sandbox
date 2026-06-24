@@ -35,7 +35,7 @@ impl PreparedFilter {
             let syscall = match syscall_to_scmp(&rule.syscall) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::debug!("跳过未知 syscall {:?}: {}", rule.syscall, e);
+                    tracing::debug!("skipping unknown syscall {:?}: {}", rule.syscall, e);
                     continue;
                 }
             };
@@ -45,7 +45,7 @@ impl PreparedFilter {
             if rule.conditions.is_empty() {
                 ctx.add_rule(action, syscall).map_err(|e| {
                     SeccompError::RuleAdd(format!(
-                        "添加规则 {:?} -> {:?} 失败: {}",
+                        "failed to add rule {:?} -> {:?}: {}",
                         rule.syscall, rule.action, e
                     ))
                 })?;
@@ -59,7 +59,7 @@ impl PreparedFilter {
                 ctx.add_rule_conditional(action, syscall, &comparators)
                     .map_err(|e| {
                         SeccompError::RuleAdd(format!(
-                            "添加条件规则 {:?} -> {:?} 失败: {}",
+                            "failed to add conditional rule {:?} -> {:?}: {}",
                             rule.syscall, rule.action, e
                         ))
                     })?;
@@ -98,7 +98,7 @@ impl PreparedFilter {
         let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         if ret < 0 {
             return Err(SeccompError::Load(
-                "prctl(PR_SET_NO_NEW_PRIVS) 失败".into(),
+                "prctl(PR_SET_NO_NEW_PRIVS) failed".into(),
             ));
         }
 
@@ -118,7 +118,7 @@ impl PreparedFilter {
 
         if ret < 0 {
             return Err(SeccompError::Load(format!(
-                "seccomp(SECCOMP_SET_MODE_FILTER) 失败: {}",
+                "seccomp(SECCOMP_SET_MODE_FILTER) failed: {}",
                 std::io::Error::last_os_error()
             )));
         }
@@ -133,7 +133,7 @@ fn bytes_to_sock_filters(bytes: &[u8]) -> Result<Vec<libc::sock_filter>, Seccomp
     const SF_SIZE: usize = 8;
     if bytes.len() % SF_SIZE != 0 {
         return Err(SeccompError::FilterCreate(format!(
-            "BPF 字节码长度 {} 不是 {} 的倍数",
+            "BPF bytecode length {} is not a multiple of {}",
             bytes.len(),
             SF_SIZE
         )));

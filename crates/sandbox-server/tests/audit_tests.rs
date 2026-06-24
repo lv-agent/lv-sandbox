@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// 测试 AuditEvent 结构体可正确序列化
 #[test]
-fn audit_event序列化为json() {
+fn audit_event_serializes_to_json() {
     let event = sandbox_server::audit::AuditEvent {
         timestamp: "2026-06-13T12:00:00Z".to_string(),
         event_type: sandbox_server::audit::AuditEventType::JobStarted,
@@ -25,7 +25,7 @@ fn audit_event序列化为json() {
 
 /// 测试 AuditEventType 所有变体可序列化
 #[test]
-fn audit_event_type所有变体可序列化() {
+fn audit_event_type_all_variants_serialize() {
     use sandbox_server::audit::AuditEventType;
 
     let variants = vec![
@@ -37,13 +37,13 @@ fn audit_event_type所有变体可序列化() {
 
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
-        assert!(!json.is_empty(), "变体 {:?} 应可序列化", v);
+        assert!(!json.is_empty(), "variant {:?} should serialize", v);
     }
 }
 
 /// 测试 AuditLogger 写入到文件
 #[test]
-fn audit_logger写入文件() {
+fn audit_logger_writes_to_file() {
     let dir = tempfile::tempdir().unwrap();
     let log_path = dir.path().join("audit.jsonl");
 
@@ -70,7 +70,7 @@ fn audit_logger写入文件() {
     // 读取文件验证
     let content = std::fs::read_to_string(&log_path).unwrap();
     let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(lines.len(), 2, "应有 2 行日志");
+    assert_eq!(lines.len(), 2, "should have 2 log lines");
 
     let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(first["event_type"], "JobStarted");
@@ -83,7 +83,7 @@ fn audit_logger写入文件() {
 
 /// 测试 AuditLogger::noop 不崩溃
 #[test]
-fn audit_logger_noop不崩溃() {
+fn audit_logger_noop_does_not_crash() {
     let logger = sandbox_server::audit::AuditLogger::noop();
     // 多次调用不 panic
     for i in 0..100 {

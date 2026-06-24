@@ -27,7 +27,7 @@ async fn node_profile_echo_via_http() {
 }
 
 #[tokio::test]
-async fn node_profile_环境变量隔离() {
+async fn node_profile_env_isolation() {
     let (_tmp, app) = create_test_app().await;
     let mut env = HashMap::new();
     env.insert("NODE_TEST".to_string(), "value".to_string());
@@ -40,7 +40,7 @@ async fn node_profile_环境变量隔离() {
 }
 
 #[tokio::test]
-async fn node_profile_超时kill进程() {
+async fn node_profile_timeout_kills_process() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,
@@ -58,12 +58,12 @@ async fn node_profile_超时kill进程() {
 }
 
 #[tokio::test]
-async fn node_profile_workspace被清理() {
+async fn node_profile_workspace_cleaned() {
     let (tmp, app) = create_test_app().await;
     let base_dir = tmp.path().to_path_buf();
 
     let job_dir = base_dir.join("node-ws-001");
-    assert!(!job_dir.exists(), "执行前 workspace 不应存在");
+    assert!(!job_dir.exists(), "workspace should not exist before run");
 
     let _ = submit_and_wait(
         app,
@@ -75,5 +75,5 @@ async fn node_profile_workspace被清理() {
     )
     .await;
 
-    assert!(!job_dir.exists(), "执行后 workspace 应被清理");
+    assert!(!job_dir.exists(), "workspace should be cleaned after run");
 }

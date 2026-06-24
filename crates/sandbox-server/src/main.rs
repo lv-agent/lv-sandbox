@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         addr = %config.server.listen_addr,
         max_concurrent = config.server.max_concurrent_jobs,
-        "sandbox-server 启动"
+        "sandbox-server starting"
     );
 
     // 3. 初始化 SandboxRunner
@@ -75,10 +75,10 @@ async fn main() -> anyhow::Result<()> {
         }
         match pc.to_profile(name, &config.sandbox) {
             Ok(profile) => {
-                tracing::info!(profile = %name, "注册 profile");
+                tracing::info!(profile = %name, "registered profile");
                 runner.register_profile(profile);
             }
-            Err(e) => tracing::warn!(profile = %name, error = %e, "profile 配置无效，跳过"),
+            Err(e) => tracing::warn!(profile = %name, error = %e, "invalid profile config, skipping"),
         }
     }
     let runner = Arc::new(runner);
@@ -95,13 +95,13 @@ async fn main() -> anyhow::Result<()> {
 
     // 6. 启动 HTTP 服务 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&config.server.listen_addr).await?;
-    tracing::info!(addr = %config.server.listen_addr, "HTTP 服务就绪");
+    tracing::info!(addr = %config.server.listen_addr, "HTTP server ready");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    tracing::info!("sandbox-server 已停止");
+    tracing::info!("sandbox-server stopped");
     Ok(())
 }
 
@@ -110,13 +110,13 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
-            .expect("监听 Ctrl-C 失败");
+            .expect("failed to listen for Ctrl-C");
     };
 
     #[cfg(unix)]
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("监听 SIGTERM 失败")
+            .expect("failed to listen for SIGTERM")
             .recv()
             .await;
     };
@@ -126,10 +126,10 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            tracing::info!("收到 Ctrl-C，开始 graceful shutdown");
+            tracing::info!("received Ctrl-C, starting graceful shutdown");
         },
         _ = terminate => {
-            tracing::info!("收到 SIGTERM，开始 graceful shutdown");
+            tracing::info!("received SIGTERM, starting graceful shutdown");
         },
     }
 }

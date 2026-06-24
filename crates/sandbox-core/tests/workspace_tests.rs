@@ -7,16 +7,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 创建临时工作目录的辅助函数
 fn create_tmp_workspace() -> (tempfile::TempDir, WorkspaceManager) {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let mgr = WorkspaceManager::new(tmp.path(), 1024 * 1024 * 1024);
     (tmp, mgr)
 }
 
 #[test]
-fn 创建job工作空间_生成正确的目录结构() {
+fn create_job_workspace_generates_correct_directory_layout() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    let ws = mgr.create_job_workspace("job-001").expect("创建失败");
+    let ws = mgr.create_job_workspace("job-001").expect("creation failed");
 
     assert!(ws.root.exists());
     assert!(ws.workspace.exists());
@@ -31,10 +31,10 @@ fn 创建job工作空间_生成正确的目录结构() {
 }
 
 #[test]
-fn 写入并读取metadata() {
+fn write_and_read_metadata() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    mgr.create_job_workspace("job-001").expect("创建失败");
+    mgr.create_job_workspace("job-001").expect("creation failed");
 
     let meta = JobMetadata {
         job_id: "job-001".to_string(),
@@ -52,9 +52,9 @@ fn 写入并读取metadata() {
         timeout_ms: 5000,
     };
 
-    mgr.write_metadata("job-001", &meta).expect("写入失败");
+    mgr.write_metadata("job-001", &meta).expect("failed to write");
 
-    let loaded = mgr.read_metadata("job-001").expect("读取失败");
+    let loaded = mgr.read_metadata("job-001").expect("failed to read");
     assert!(loaded.is_some());
 
     let loaded = loaded.unwrap();
@@ -65,50 +65,50 @@ fn 写入并读取metadata() {
 }
 
 #[test]
-fn 读取不存在的metadata返回none() {
+fn read_nonexistent_metadata_returns_none() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    let result = mgr.read_metadata("nonexistent").expect("不应失败");
+    let result = mgr.read_metadata("nonexistent").expect("should not fail");
     assert!(result.is_none());
 }
 
 #[test]
-fn 列出所有job() {
+fn list_all_jobs() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    mgr.create_job_workspace("job-001").expect("创建失败");
-    mgr.create_job_workspace("job-002").expect("创建失败");
-    mgr.create_job_workspace("job-003").expect("创建失败");
+    mgr.create_job_workspace("job-001").expect("creation failed");
+    mgr.create_job_workspace("job-002").expect("creation failed");
+    mgr.create_job_workspace("job-003").expect("creation failed");
 
-    let mut jobs = mgr.list_jobs().expect("列出失败");
+    let mut jobs = mgr.list_jobs().expect("list failed");
     jobs.sort();
 
     assert_eq!(jobs, vec!["job-001", "job-002", "job-003"]);
 }
 
 #[test]
-fn 清理job删除整个目录() {
+fn cleanup_job_deletes_entire_directory() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    mgr.create_job_workspace("job-001").expect("创建失败");
+    mgr.create_job_workspace("job-001").expect("creation failed");
     assert!(mgr.base_dir().join("job-001").exists());
 
-    mgr.cleanup_job("job-001").expect("清理失败");
+    mgr.cleanup_job("job-001").expect("cleanup failed");
     assert!(!mgr.base_dir().join("job-001").exists());
 }
 
 #[test]
-fn 清理不存在的job不报错() {
+fn cleanup_nonexistent_job_does_not_error() {
     let (_tmp, mgr) = create_tmp_workspace();
 
     // 不存在的 job 应该静默成功
-    mgr.cleanup_job("nonexistent").expect("清理不存在的 job 不应报错");
+    mgr.cleanup_job("nonexistent").expect("cleaning up a nonexistent job should not error");
 }
 
 #[test]
-fn metadata状态转换() {
+fn metadata_state_transition() {
     let (_tmp, mgr) = create_tmp_workspace();
-    mgr.create_job_workspace("job-001").expect("创建失败");
+    mgr.create_job_workspace("job-001").expect("creation failed");
 
     // Initializing
     let meta = JobMetadata {
@@ -123,7 +123,7 @@ fn metadata状态转换() {
         workspace: "/sandboxes/job-001".to_string(),
         timeout_ms: 5000,
     };
-    mgr.write_metadata("job-001", &meta).expect("写入失败");
+    mgr.write_metadata("job-001", &meta).expect("failed to write");
 
     // 更新为 Running
     let meta = JobMetadata {
@@ -133,7 +133,7 @@ fn metadata状态转换() {
         sid: Some(999),
         ..meta
     };
-    mgr.write_metadata("job-001", &meta).expect("写入失败");
+    mgr.write_metadata("job-001", &meta).expect("failed to write");
 
     let loaded = mgr.read_metadata("job-001").unwrap().unwrap();
     assert!(matches!(loaded.state, JobState::Running));
@@ -143,83 +143,83 @@ fn metadata状态转换() {
 // ==================== 磁盘水位监控 ====================
 
 #[test]
-fn 正常磁盘空间_水位检查返回true() {
+fn normal_disk_space_watermark_check_returns_true() {
     let (tmp, _mgr) = create_tmp_workspace();
 
     // 水位线设为 1MB，临时目录所在文件系统肯定有超过 1MB 剩余空间
     let mgr = WorkspaceManager::new(tmp.path(), 1024 * 1024);
 
-    let result = mgr.check_disk_watermark().expect("水位检查不应报错");
-    assert!(result, "正常空间时水位检查应通过");
+    let result = mgr.check_disk_watermark().expect("watermark check should not error");
+    assert!(result, "watermark check should pass with normal free space");
 }
 
 #[test]
-fn 水位线设为极大值_水位检查返回false() {
+fn watermark_set_to_huge_value_watermark_check_returns_false() {
     let (tmp, _mgr) = create_tmp_workspace();
 
     // 水位线设为 1 PB，任何文件系统都不可能有这么多剩余空间
     let one_pb: u64 = 1024 * 1024 * 1024 * 1024 * 1024;
     let mgr = WorkspaceManager::new(tmp.path(), one_pb);
 
-    let result = mgr.check_disk_watermark().expect("水位检查不应报错");
-    assert!(!result, "水位线超过可用空间时应返回 false");
+    let result = mgr.check_disk_watermark().expect("watermark check should not error");
+    assert!(!result, "should return false when watermark exceeds free space");
 }
 
 // ==================== Phase 6: 磁盘隔离增强 ====================
 
 #[test]
-fn workspace_size_计算目录总大小() {
+fn workspace_size_computes_total_directory_size() {
     let (_tmp, mgr) = create_tmp_workspace();
-    let ws = mgr.create_job_workspace("job-size-001").expect("创建失败");
+    let ws = mgr.create_job_workspace("job-size-001").expect("creation failed");
 
     // 空 workspace 应为 0
-    let size = mgr.workspace_size("job-size-001").expect("计算大小不应报错");
-    assert_eq!(size, 0, "空 workspace 应为 0 字节");
+    let size = mgr.workspace_size("job-size-001").expect("size computation should not error");
+    assert_eq!(size, 0, "empty workspace should be 0 bytes");
 
     // 写入一些数据
-    std::fs::write(ws.workspace.join("test.txt"), "hello world").expect("写入失败");
-    std::fs::write(ws.workspace.join("data.bin"), &[0u8; 1024]).expect("写入失败");
+    std::fs::write(ws.workspace.join("test.txt"), "hello world").expect("failed to write");
+    std::fs::write(ws.workspace.join("data.bin"), &[0u8; 1024]).expect("failed to write");
 
-    let size = mgr.workspace_size("job-size-001").expect("计算大小不应报错");
+    let size = mgr.workspace_size("job-size-001").expect("size computation should not error");
     // "hello world" = 11 字节 + 1024 字节 = 1035 字节
     // 加上目录项本身的开销（通常 4096 per dir），但至少应 ≥ 1035
     assert!(
         size >= 1035,
-        "workspace 大小应至少 1035 字节，实际 {}",
+        "workspace size should be at least 1035 bytes, actual {}",
         size
     );
 
-    mgr.cleanup_job("job-size-001").expect("清理失败");
+    mgr.cleanup_job("job-size-001").expect("cleanup failed");
 }
 
 #[test]
-fn workspace_size_不存在的job返回0() {
+fn workspace_size_nonexistent_job_returns_0() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    let size = mgr.workspace_size("nonexistent").expect("不应报错");
-    assert_eq!(size, 0, "不存在的 job 大小应为 0");
+    let size = mgr.workspace_size("nonexistent").expect("should not error");
+    assert_eq!(size, 0, "nonexistent job size should be 0");
 }
 
 #[test]
-fn cleanup_all_jobs_批量清理() {
+fn cleanup_all_jobs_batch_cleanup() {
     let (_tmp, mgr) = create_tmp_workspace();
 
-    mgr.create_job_workspace("batch-001").expect("创建失败");
-    mgr.create_job_workspace("batch-002").expect("创建失败");
-    mgr.create_job_workspace("batch-003").expect("创建失败");
+    mgr.create_job_workspace("batch-001").expect("creation failed");
+    mgr.create_job_workspace("batch-002").expect("creation failed");
+    mgr.create_job_workspace("batch-003").expect("creation failed");
 
-    assert_eq!(mgr.list_jobs().expect("列出失败").len(), 3);
+    assert_eq!(mgr.list_jobs().expect("list failed").len(), 3);
 
-    let cleaned = mgr.cleanup_all_jobs().expect("批量清理不应报错");
-    assert_eq!(cleaned, 3, "应清理 3 个 job");
-    assert_eq!(mgr.list_jobs().expect("列出失败").len(), 0);
+    let cleaned = mgr.cleanup_all_jobs().expect("batch cleanup should not error");
+    assert_eq!(cleaned, 3, "should clean 3 jobs");
+    assert_eq!(mgr.list_jobs().expect("list failed").len(), 0);
 }
 
 #[test]
-fn cleanup_all_jobs_空目录不报错() {
+fn cleanup_all_jobs_empty_dir_does_not_error() {
     let (tmp, _mgr) = create_tmp_workspace();
     let mgr = WorkspaceManager::new(tmp.path(), 1024 * 1024);
 
-    let cleaned = mgr.cleanup_all_jobs().expect("空目录不应报错");
-    assert_eq!(cleaned, 0, "空目录应清理 0 个");
+    let cleaned = mgr.cleanup_all_jobs().expect("empty dir should not error");
+    assert_eq!(cleaned, 0, "empty dir should clean 0 jobs");
 }

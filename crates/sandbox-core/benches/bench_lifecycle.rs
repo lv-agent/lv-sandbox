@@ -15,14 +15,14 @@ use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
 
 /// 创建测试用 SandboxRunner
 async fn create_bench_runner() -> (tempfile::TempDir, SandboxRunner) {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let config = SandboxConfig {
         sandbox_base_dir: tmp.path().to_path_buf(),
         disk_watermark_bytes: 1024 * 1024 * 1024,
     };
     let runner = SandboxRunner::new(&config)
         .await
-        .expect("创建 runner 失败");
+        .expect("failed to create runner");
     (tmp, runner)
 }
 
@@ -39,15 +39,15 @@ fn make_request(job_id: &str, argv: &[&str]) -> JobRequest {
 
 /// 读取当前进程 VmRSS（KB）
 fn read_vm_rss_kb() -> u64 {
-    let status = fs::read_to_string("/proc/self/status").expect("读取 /proc/self/status 失败");
+    let status = fs::read_to_string("/proc/self/status").expect("failed to read /proc/self/status");
     for line in status.lines() {
         if line.starts_with("VmRSS:") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             // VmRSS:    12345 kB
-            return parts[1].parse().expect("解析 VmRSS 数值失败");
+            return parts[1].parse().expect("failed to parse VmRSS value");
         }
     }
-    panic!("未找到 VmRSS");
+    panic!("VmRSS not found");
 }
 
 /// 基准 1：fork→exec 延迟
@@ -55,7 +55,7 @@ fn read_vm_rss_kb() -> u64 {
 /// 测量从提交 job 到完成（echo hello）的端到端延迟。
 /// 这是 fork + pre_exec + exec + wait 的完整开销。
 fn bench_fork_exec_latency(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("创建 runtime 失败");
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
     let (_tmp, runner) = rt.block_on(create_bench_runner());
 
     let mut group = c.benchmark_group("fork_exec");
@@ -65,7 +65,7 @@ fn bench_fork_exec_latency(c: &mut Criterion) {
     group.bench_function("echo_hello", |b| {
         b.iter(|| {
             let req = make_request("bench-echo", &["/bin/echo", "hello"]);
-            rt.block_on(runner.run_job(req)).expect("run_job 不应失败");
+            rt.block_on(runner.run_job(req)).expect("run_job should not fail");
         });
     });
 
@@ -77,7 +77,7 @@ fn bench_fork_exec_latency(c: &mut Criterion) {
 /// 测量空载 runner 的 RSS。
 /// 这不是传统意义上的 benchmark，而是利用 criterion 的输出报告机制。
 fn bench_runner_rss(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("创建 runtime 失败");
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
     let (_tmp, _runner) = rt.block_on(create_bench_runner());
 
     let mut group = c.benchmark_group("memory");
@@ -93,8 +93,8 @@ fn bench_runner_rss(c: &mut Criterion) {
     // 报告 RSS
     let rss_kb = read_vm_rss_kb();
     let rss_mb = rss_kb as f64 / 1024.0;
-    eprintln!("\n=== Runner 空载 RSS: {:.1} MB ({}) KB ===\n", rss_mb, rss_kb);
-    assert!(rss_mb < 100.0, "runner RSS 应 < 100MB，实际 {:.1}MB", rss_mb);
+    eprintln!("\n=== Runner idle RSS: {:.1} MB ({}) KB ===\n", rss_mb, rss_kb);
+    assert!(rss_mb < 100.0, "runner RSS should be < 100MB, actual {:.1}MB", rss_mb);
 
     group.finish();
 }
@@ -103,7 +103,7 @@ fn bench_runner_rss(c: &mut Criterion) {
 ///
 /// 提交 N 个轻量 job，测量 RSS 增量。
 fn bench_per_job_overhead(c: &mut Criterion) {
-    let rt = tokio::runtime::Runtime::new().expect("创建 runtime 失败");
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
     let (_tmp, runner) = rt.block_on(create_bench_runner());
 
     let mut group = c.benchmark_group("memory");
@@ -118,7 +118,7 @@ fn bench_per_job_overhead(c: &mut Criterion) {
             &format!("mem-{i}"),
             &["/bin/sh", "-c", "echo ok"],
         );
-        rt.block_on(runner.run_job(req)).expect("run_job 不应失败");
+        rt.block_on(runner.run_job(req)).expect("run_job should not fail");
     }
 
     let rss_after_kb = read_vm_rss_kb();
@@ -127,7 +127,7 @@ fn bench_per_job_overhead(c: &mut Criterion) {
     let per_job_mb = per_job_kb as f64 / 1024.0;
 
     eprintln!(
-        "\n=== Per-job 内存开销: {:.2} MB/job ({} KB/job) ===",
+        "\n=== Per-job memory overhead: {:.2} MB/job ({} KB/job) ===",
         per_job_mb, per_job_kb
     );
     eprintln!(

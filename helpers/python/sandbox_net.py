@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""cr-019: sandbox 受控出站 helper。
+"""cr-019: sandbox controlled-egress helper.
 
-读环境变量 SANDBOX_PROXY_SOCK(SOCKS5h over UDS 代理),把 HTTP 请求经代理转发。
-纯标准库,零三方依赖,适合被沙箱化任务 import。
+Reads SANDBOX_PROXY_SOCK (a SOCKS5h-over-UDS proxy) and forwards HTTP requests
+through it. Pure standard library, no third-party deps; safe to import from a
+sandboxed task.
 """
 import os
 import socket
@@ -16,13 +17,13 @@ def _socks5h_connect(proxy_sock: str, host: str, port: int) -> socket.socket:
     s.connect(proxy_sock)
     # 问候:NO-AUTH
     s.sendall(b"\x05\x01\x00")
-    assert s.recv(2) == b"\x05\x00", "代理拒绝 NO-AUTH"
+    assert s.recv(2) == b"\x05\x00", "proxy rejected NO-AUTH"
     # 请求 CONNECT(DOMAIN ATYP,远程 DNS)
     hb = host.encode()
     s.sendall(b"\x05\x01\x00\x03" + bytes([len(hb)]) + hb + port.to_bytes(2, "big"))
     rep = s.recv(10)
     if len(rep) < 2 or rep[1] != 0:
-        raise ConnectionError(f"SOCKS5 拒绝(reply={rep[1] if len(rep) > 1 else '?'})")
+        raise ConnectionError(f"SOCKS5 rejected (reply={rep[1] if len(rep) > 1 else '?'})")
     return s
 
 
@@ -46,7 +47,7 @@ def request(method: str, url: str, body=None, headers=None) -> Response:
 
     proxy = os.environ.get("SANDBOX_PROXY_SOCK")
     if not proxy:
-        raise RuntimeError("SANDBOX_PROXY_SOCK 未设置:该 profile 无出站白名单")
+        raise RuntimeError("SANDBOX_PROXY_SOCK not set: this profile has no egress allowlist")
 
     s = _socks5h_connect(proxy, host, port)
     if u.scheme == "https":

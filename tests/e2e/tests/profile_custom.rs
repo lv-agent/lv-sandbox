@@ -9,7 +9,7 @@ use sandbox_e2e::helpers::*;
 use sandbox_server::config::ProfileConfig;
 
 #[tokio::test]
-async fn 自定义profile覆盖rlimit通过http执行() {
+async fn custom_profile_overrides_rlimit_via_http() {
     let custom = sandbox_core::profile::SandboxProfile {
         name: "custom_rl".to_string(),
         rlimit: sandbox_core::rlimit::RlimitConfig::new()
@@ -38,7 +38,7 @@ async fn 自定义profile覆盖rlimit通过http执行() {
 }
 
 #[tokio::test]
-async fn 自定义profile带extra_readonly_paths() {
+async fn custom_profile_with_extra_readonly_paths() {
     let mut custom = sandbox_core::profile::SandboxProfile::shell();
     custom.name = "custom_paths".to_string();
     custom.extra_readonly_paths = vec!["/usr/lib".into()];
@@ -59,7 +59,7 @@ async fn 自定义profile带extra_readonly_paths() {
 }
 
 #[tokio::test]
-async fn 自定义profile覆盖内置shell() {
+async fn custom_profile_overrides_builtin_shell() {
     // 重新注册 shell profile（覆盖内置的）
     let mut overridden = sandbox_core::profile::SandboxProfile::shell();
     // 覆盖 timeout 为 10s
@@ -75,7 +75,7 @@ async fn 自定义profile覆盖内置shell() {
 }
 
 #[tokio::test]
-async fn 自定义profile带custom_timeout() {
+async fn custom_profile_with_custom_timeout() {
     let mut custom = sandbox_core::profile::SandboxProfile::shell();
     custom.name = "long_task".to_string();
     custom.default_timeout = std::time::Duration::from_secs(30);
@@ -97,7 +97,7 @@ async fn 自定义profile带custom_timeout() {
 }
 
 #[tokio::test]
-async fn yaml解析profile_config转换为sandbox_profile() {
+async fn yaml_parses_profile_config_to_sandbox_profile() {
     let yaml = r#"
 rlimit:
   cpu_seconds: 10
@@ -108,10 +108,10 @@ extra_readonly_paths:
   - "/data/shared"
 "#;
 
-    let pc: ProfileConfig = serde_yaml::from_str(yaml).expect("YAML 解析失败");
+    let pc: ProfileConfig = serde_yaml::from_str(yaml).expect("YAML parse failed");
     let profile = pc
         .to_profile("yaml_test", &sandbox_server::config::SandboxSection::default())
-        .expect("转换失败");
+        .expect("conversion failed");
 
     assert_eq!(profile.name, "yaml_test");
     assert!(profile.rlimit.cpu_seconds == Some(10));

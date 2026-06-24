@@ -9,7 +9,7 @@ use sandbox_e2e::helpers::*; // glob 导入,同 profile_python.rs
 
 /// 有白名单的 profile:起代理,任务能 AF_UNIX 连上 proxy.sock。
 #[tokio::test]
-async fn 有白名单时任务能连代理socket() {
+async fn allowlisted_task_can_connect_proxy_socket() {
     let profile = SandboxProfile {
         name: "egress_on".into(),
         egress_allowlist: vec![EgressRule {
@@ -31,14 +31,14 @@ async fn 有白名单时任务能连代理socket() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         job["stdout"].as_str().unwrap().contains("connected"),
-        "AF_UNIX 应放行,实际 job: {}",
+        "AF_UNIX should be allowed, actual job: {}",
         job
     );
 }
 
 /// INET socket 仍被 seccomp KILL(用 python profile 跑 python3,landlock 放行解释器)。
 #[tokio::test]
-async fn inet_socket仍被阻断() {
+async fn inet_socket_still_blocked() {
     let (_tmp, app) = create_test_app().await;
     let argv = [
         "/usr/bin/python3",
@@ -48,12 +48,12 @@ async fn inet_socket仍被阻断() {
     let (status, job) =
         submit_and_wait(app, "egress-inet", &argv, "python", "10s", HashMap::new()).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(job["status"], "Killed", "INET socket 应被 seccomp 杀死");
+    assert_eq!(job["status"], "Killed", "INET socket should be killed by seccomp");
 }
 
 /// 空白名单 profile:不注入 SANDBOX_PROXY_SOCK。
 #[tokio::test]
-async fn 空白名单时不注入proxy_env() {
+async fn no_proxy_env_when_empty_allowlist() {
     let (_tmp, app) = create_test_app().await;
     let argv = [
         "/bin/sh",
@@ -71,7 +71,7 @@ async fn 空白名单时不注入proxy_env() {
 
 /// python helper sandbox_net 经代理往返 loopback 上游。
 #[tokio::test]
-async fn python_helper经代理往返上游() {
+async fn python_helper_roundtrips_via_proxy() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // mock 上游:期望 "GET / HTTP/1.1",回 200 + body
@@ -112,7 +112,7 @@ async fn python_helper经代理往返上游() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         job["stdout"].as_str().unwrap().contains("200"),
-        "helper 经代理应拿到 200,实际 job: {}",
+        "helper should get 200 via proxy, actual job: {}",
         job
     );
 }
@@ -124,7 +124,7 @@ async fn python_helper经代理往返上游() {
 /// 故改用宿主 node 直接运行 helper,对真实的 per-job proxy(JobProxy)发请求,
 /// 验证 node helper 的 SOCKS5h+HTTP 客户端逻辑(代理代码与 python e2e 同一份)。
 #[tokio::test]
-async fn node_helper经代理往返上游() {
+async fn node_helper_roundtrips_via_proxy() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::process::Command;
 
@@ -135,7 +135,7 @@ async fn node_helper经代理往返上游() {
         .await
         .is_err()
     {
-        eprintln!("跳过:环境无 node");
+        eprintln!("skipped: no node in environment");
         return;
     }
 
@@ -177,7 +177,7 @@ async fn node_helper经代理往返上游() {
         .env("SANDBOX_PROXY_SOCK", sock_path.to_str().unwrap())
         .output()
         .await
-        .expect("执行 node 失败");
+        .expect("failed to execute node");
 
     proxy.stop().await;
 
@@ -185,7 +185,7 @@ async fn node_helper经代理往返上游() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stdout.contains("200"),
-        "node helper 经代理应拿到 200,stdout={:?} stderr={:?}",
+        "node helper should get 200 via proxy, stdout={:?} stderr={:?}",
         stdout,
         stderr
     );
@@ -197,7 +197,7 @@ async fn node_helper经代理往返上游() {
 /// + JobProxy(测试进程内)+ python helper 子进程。SSL_CERT_FILE 让 helper
 /// 信任自签证书。验证 helper 的 TLS 分支(ssl.wrap_socket over SOCKS5 relay)。
 #[tokio::test]
-async fn python_helper经代理走https() {
+async fn python_helper_https_via_proxy() {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
@@ -205,7 +205,7 @@ async fn python_helper经代理走https() {
     if Command::new("openssl").arg("version").output().await.is_err()
         || Command::new("python3").arg("--version").output().await.is_err()
     {
-        eprintln!("跳过:环境无 openssl/python3");
+        eprintln!("skipped: no openssl/python3 in environment");
         return;
     }
 
@@ -226,7 +226,7 @@ async fn python_helper经代理走https() {
         .unwrap();
     assert!(
         gen.status.success(),
-        "openssl 生成证书失败: {}",
+        "openssl cert generation failed: {}",
         String::from_utf8_lossy(&gen.stderr)
     );
 
@@ -259,8 +259,8 @@ cs.close()
     reader
         .read_line(&mut port_line)
         .await
-        .expect("读取 TLS server 端口失败");
-    let port: u16 = port_line.trim().parse().expect("端口解析失败");
+        .expect("failed to read TLS server port");
+    let port: u16 = port_line.trim().parse().expect("port parse failed");
 
     // 3) JobProxy(allowlist localhost:port)
     let proxy_tmp = tempfile::tempdir().unwrap();
@@ -289,7 +289,7 @@ cs.close()
         .env("SSL_CERT_FILE", cert.to_str().unwrap())
         .output()
         .await
-        .expect("执行 python helper 失败");
+        .expect("failed to execute python helper");
 
     proxy.stop().await;
     let _ = server.kill().await;
@@ -298,7 +298,7 @@ cs.close()
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stdout.contains("200"),
-        "helper 经 https 应拿 200,stdout={:?} stderr={:?}",
+        "helper should get 200 over https, stdout={:?} stderr={:?}",
         stdout,
         stderr
     );
@@ -308,14 +308,14 @@ cs.close()
 /// 与 python HTTPS 同一份自签证书 + Python TLS server,换 node helper +
 /// NODE_EXTRA_CA_CERTS 信任自签。验证 node helper 的 tls.connect 分支。
 #[tokio::test]
-async fn node_helper经代理走https() {
+async fn node_helper_https_via_proxy() {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
     if Command::new("openssl").arg("version").output().await.is_err()
         || Command::new("node").arg("--version").output().await.is_err()
     {
-        eprintln!("跳过:环境无 openssl/node");
+        eprintln!("skipped: no openssl/node in environment");
         return;
     }
 
@@ -330,7 +330,7 @@ async fn node_helper经代理走https() {
             "-days", "1", "-nodes", "-subj", "/CN=localhost",
         ])
         .output().await.unwrap();
-    assert!(gen.status.success(), "openssl 生成证书失败: {}", String::from_utf8_lossy(&gen.stderr));
+    assert!(gen.status.success(), "openssl cert generation failed: {}", String::from_utf8_lossy(&gen.stderr));
 
     let py_server = r#"
 import ssl, socket, sys
@@ -353,8 +353,8 @@ cs.close()
         .kill_on_drop(true).spawn().unwrap();
     let mut reader = BufReader::new(server.stdout.take().unwrap());
     let mut port_line = String::new();
-    reader.read_line(&mut port_line).await.expect("读取端口失败");
-    let port: u16 = port_line.trim().parse().expect("端口解析失败");
+    reader.read_line(&mut port_line).await.expect("failed to read port");
+    let port: u16 = port_line.trim().parse().expect("port parse failed");
 
     let proxy_tmp = tempfile::tempdir().unwrap();
     let matcher = sandbox_core::egress::AllowlistMatcher::new(vec![
@@ -373,7 +373,7 @@ cs.close()
         .arg("-e").arg(&script)
         .env("SANDBOX_PROXY_SOCK", sock_path.to_str().unwrap())
         .env("NODE_EXTRA_CA_CERTS", cert.to_str().unwrap())
-        .output().await.expect("执行 node 失败");
+        .output().await.expect("failed to execute node");
 
     proxy.stop().await;
     let _ = server.kill().await;
@@ -382,7 +382,7 @@ cs.close()
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stdout.contains("200"),
-        "node helper 经 https 应拿 200,stdout={:?} stderr={:?}",
+        "node helper should get 200 over https, stdout={:?} stderr={:?}",
         stdout, stderr
     );
 }

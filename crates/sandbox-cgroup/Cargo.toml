@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-cgroup"
-description = "cgroup v2 管理：可用性检测、资源限制、进程迁移、资源统计"
+description = "cgroup v2 management: availability detection, resource limits, process migration, usage accounting"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

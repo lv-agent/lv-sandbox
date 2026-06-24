@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-mcp"
-description = "MCP 网关：将 sandbox-server REST API 封装为 MCP 工具"
+description = "MCP gateway: wraps the sandbox-server REST API as MCP tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

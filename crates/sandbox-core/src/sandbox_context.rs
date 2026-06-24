@@ -65,7 +65,7 @@ impl SandboxRunner {
         // 0. 磁盘水位检查
         if !self.workspace_mgr.check_disk_watermark()? {
             return Err(CoreError::Workspace(
-                "磁盘剩余空间低于水位线，拒绝新 job".to_string(),
+                "disk free below watermark, rejecting new job".to_string(),
             ));
         }
 
@@ -100,7 +100,7 @@ impl SandboxRunner {
                     tracing::warn!(
                         job_id = %request.job_id,
                         error = %e,
-                        "代理启动失败,该 job 将零出站"
+                        "proxy start failed, job will have zero egress"
                     );
                     None
                 }
@@ -128,7 +128,7 @@ impl SandboxRunner {
         // 4. 创建 error pipe（CLOEXEC：exec 成功后写端自动关闭）
         let mut pipe_fds: [libc::c_int; 2] = [-1, -1];
         if unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return Err(CoreError::Process("pipe2 创建失败".into()));
+            return Err(CoreError::Process("pipe2 creation failed".into()));
         }
         let error_read_fd = pipe_fds[0];
         let error_write_fd = pipe_fds[1];
@@ -181,7 +181,7 @@ impl SandboxRunner {
                 let _ = cg.destroy();
             }
             return Err(CoreError::Process(format!(
-                "pre_exec 失败: {:?}",
+                "pre_exec failed: {:?}",
                 error
             )));
         }
@@ -189,7 +189,7 @@ impl SandboxRunner {
         // 9. 迁移进程到 cgroup
         if let Some(ref cg) = cgroup {
             if let Err(e) = cg.migrate_process(child_pid as u32) {
-                tracing::warn!(job_id = %request.job_id, error = %e, "cgroup 迁移失败");
+                tracing::warn!(job_id = %request.job_id, error = %e, "cgroup migration failed");
             }
         }
 

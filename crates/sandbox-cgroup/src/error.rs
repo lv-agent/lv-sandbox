@@ -2,24 +2,24 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CgroupError {
-    #[error("cgroup v2 不可用: {0}")]
+    #[error("cgroup v2 unavailable: {0}")]
     Unavailable(String),
 
-    #[error("cgroup 创建失败: {0}")]
+    #[error("cgroup creation failed: {0}")]
     CreateFailed(String),
 
-    #[error("进程迁移失败: {0}")]
+    #[error("process migration failed: {0}")]
     MigrateFailed(String),
 
-    #[error("资源写入失败: {0}")]
+    #[error("resource write failed: {0}")]
     ResourceWrite(String),
 
-    #[error("读取失败: {0}")]
+    #[error("read failed: {0}")]
     ReadFailed(String),
 
-    #[error("销毁失败: {0}")]
+    #[error("destroy failed: {0}")]
     DestroyFailed(String),
 
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

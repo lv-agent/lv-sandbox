@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-landlock"
-description = "Landlock LSM 封装：ABI 检测、文件系统策略构建、预编译 ruleset"
+description = "Landlock LSM wrapper: ABI detection, filesystem policy building, precompiled ruleset"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

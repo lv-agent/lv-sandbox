@@ -2,45 +2,45 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
-    #[error("沙箱初始化失败: {0}")]
+    #[error("sandbox init failed: {0}")]
     SandboxInit(String),
 
-    #[error("进程错误: {0}")]
+    #[error("process error: {0}")]
     Process(String),
 
-    #[error("工作空间错误: {0}")]
+    #[error("workspace error: {0}")]
     Workspace(String),
 
-    #[error("环境构建错误: {0}")]
+    #[error("env build error: {0}")]
     Env(String),
 
-    #[error("配置错误: {0}")]
+    #[error("config error: {0}")]
     Config(String),
 
-    #[error("超时")]
+    #[error("timeout")]
     Timeout,
 
-    #[error("容量不足")]
+    #[error("capacity exceeded")]
     NoCapacity,
 
-    #[error("Profile 未找到: {0}")]
+    #[error("profile not found: {0}")]
     ProfileNotFound(String),
 
-    #[error("Landlock 错误: {0}")]
+    #[error("Landlock error: {0}")]
     Landlock(#[from] sandbox_landlock::LandlockError),
 
-    #[error("seccomp 错误: {0}")]
+    #[error("seccomp error: {0}")]
     Seccomp(#[from] sandbox_seccomp::SeccompError),
 
-    #[error("cgroup 错误: {0}")]
+    #[error("cgroup error: {0}")]
     Cgroup(#[from] sandbox_cgroup::CgroupError),
 
-    #[error("序列化错误: {0}")]
+    #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 
-    #[error("系统调用错误: {0}")]
+    #[error("syscall error: {0}")]
     Syscall(#[from] nix::errno::Errno),
 
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

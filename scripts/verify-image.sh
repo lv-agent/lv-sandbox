@@ -15,15 +15,15 @@ HOST_PORT="${HOST_PORT:-18080}"
 NAME="sandbox-verify-$$"
 
 if ! docker ps >/dev/null 2>&1; then
-    echo "✗ docker 不可用。请确保当前用户在 docker 组（重新登录生效），" >&2
-    echo "  或用: sg docker -c \"bash scripts/verify-image.sh\"" >&2
+    echo "✗ docker unavailable. Ensure the current user is in the docker group (re-login)," >&2
+    echo "  or run: sg docker -c \"bash scripts/verify-image.sh\"" >&2
     exit 1
 fi
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-echo "==> 启动 $IMAGE（127.0.0.1:$HOST_PORT）"
+echo "==> starting $IMAGE (127.0.0.1:$HOST_PORT)"
 docker run -d --name "$NAME" -p "$HOST_PORT:8080" \
     --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
     --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
@@ -32,14 +32,14 @@ docker run -d --name "$NAME" -p "$HOST_PORT:8080" \
     --user 10000:10000 \
     "$IMAGE" >/dev/null
 
-echo "==> 等待 server 就绪"
+echo "==> waiting for server to be ready"
 ok=0
 for i in $(seq 1 15); do
     if curl -sf "http://127.0.0.1:$HOST_PORT/health" >/dev/null 2>&1; then ok=1; break; fi
     sleep 1
 done
 if [ "$ok" != 1 ]; then
-    echo "✗ server 未就绪"
+    echo "✗ server not ready"
     docker logs "$NAME" 2>&1 | tail -20
     exit 1
 fi
@@ -50,26 +50,26 @@ curl -sf "http://127.0.0.1:$HOST_PORT/health" >/dev/null && echo "   ok"
 echo "==> /api/v1/profiles"
 prof=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/profiles")
 echo "   $prof"
-echo "$prof" | grep -q '"shell"' || { echo "✗ 缺 shell profile"; exit 1; }
+echo "$prof" | grep -q '"shell"' || { echo "✗ missing shell profile"; exit 1; }
 
-echo "==> /api/v1/jobs (echo, 异步提交)"
+echo "==> /api/v1/jobs (echo, async submit)"
 resp=$(curl -s -X POST "http://127.0.0.1:$HOST_PORT/api/v1/jobs" \
     -H 'content-type: application/json' \
     -d '{"job_id":"verify-1","argv":["/bin/echo","hello sandbox"],"profile_name":"shell","timeout":"5s","custom_env":{}}')
 echo "   $resp"
-echo "$resp" | grep -q '"status":"Running"' || { echo "✗ 提交未返回 Running"; exit 1; }
+echo "$resp" | grep -q '"status":"Running"' || { echo "✗ submit did not return Running"; exit 1; }
 
-echo "==> 轮询 GET /api/v1/jobs/verify-1"
+echo "==> polling GET /api/v1/jobs/verify-1"
 ok=0
 for i in $(seq 1 50); do
     resp=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/jobs/verify-1")
     if echo "$resp" | grep -q '"status":"Completed"'; then ok=1; break; fi
     sleep 0.1
 done
-[ "$ok" = 1 ] || { echo "✗ 任务未 Completed: $resp"; exit 1; }
+[ "$ok" = 1 ] || { echo "✗ job not Completed: $resp"; exit 1; }
 echo "   $resp"
-echo "$resp" | grep -q '"exit_code":0'       || { echo "✗ exit_code 非 0"; exit 1; }
-echo "$resp" | grep -q 'hello sandbox'       || { echo "✗ stdout 不含预期输出"; exit 1; }
+echo "$resp" | grep -q '"exit_code":0'       || { echo "✗ exit_code not 0"; exit 1; }
+echo "$resp" | grep -q 'hello sandbox'       || { echo "✗ stdout missing expected output"; exit 1; }
 
 echo ""
-echo "✅ 容器内端到端验证通过：$IMAGE"
+echo "✅ in-container end-to-end verification passed: $IMAGE"

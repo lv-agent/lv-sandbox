@@ -17,7 +17,7 @@ use std::process::Command;
 use landlock::{Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI};
 
 fn main() {
-    eprintln!("=== #70 实验：pre_exec 动态 landlock /proc/<pid> ===");
+    eprintln!("=== #70 experiment: pre_exec dynamic landlock /proc/<pid> ===");
 
     // sh 内建 read 读文件（不 fork），$PPID = 父进程 pid（未放行，应被拒）
     let script = "\
@@ -33,7 +33,7 @@ echo DONE \
     unsafe {
         cmd.pre_exec(|| {
             let pid = libc::getpid();
-            eprintln!("[pre_exec] 子 pid = {pid}");
+            eprintln!("[pre_exec] child pid = {pid}");
 
             let abi = ABI::V3;
             let all = AccessFs::from_all(abi);
@@ -62,7 +62,7 @@ echo DONE \
                         .map_err(|e| std::io::Error::other(format!("add {p}: {e}")))?;
                 }
             }
-            eprintln!("[pre_exec] 基础路径已放行");
+            eprintln!("[pre_exec] base paths allowed");
 
             // ★ 关键：动态放行 /proc/<自己的 pid>
             let self_proc = format!("/proc/{pid}");
@@ -71,7 +71,7 @@ echo DONE \
             rs = rs
                 .add_rule(PathBeneath::new(fd, read))
                 .map_err(|e| std::io::Error::other(format!("add {self_proc}: {e}")))?;
-            eprintln!("[pre_exec] ★ 已动态放行 {self_proc}");
+            eprintln!("[pre_exec] ★ dynamically granted {self_proc}");
 
             // 全局 /proc/cpuinfo（验证全局无害项放行）
             if let Ok(fd) = PathFd::new("/proc/cpuinfo") {
@@ -82,7 +82,7 @@ echo DONE \
 
             rs.restrict_self()
                 .map_err(|e| std::io::Error::other(format!("restrict_self: {e}")))?;
-            eprintln!("[pre_exec] ★ restrict_self 成功（信号安全通过）");
+            eprintln!("[pre_exec] ★ restrict_self succeeded (signal-safe)");
             Ok(())
         });
     }
@@ -90,14 +90,14 @@ echo DONE \
     let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("[结果] spawn/exec 失败: {e}");
+            eprintln!("[result] spawn/exec failed: {e}");
             std::process::exit(2);
         }
     };
-    eprintln!("[结果] exit code = {:?}", output.status.code());
-    print!("[结果] stdout:\n{}", String::from_utf8_lossy(&output.stdout));
+    eprintln!("[result] exit code = {:?}", output.status.code());
+    print!("[result] stdout:\n{}", String::from_utf8_lossy(&output.stdout));
     if !output.stderr.is_empty() {
-        eprintln!("[结果] stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+        eprintln!("[result] stderr:\n{}", String::from_utf8_lossy(&output.stderr));
     }
 
     let out = String::from_utf8_lossy(&output.stdout);
@@ -106,8 +106,8 @@ echo DONE \
         && out.contains("ppid_status: BLOCKED");
     eprintln!();
     if ok {
-        eprintln!("✅ 实验 B 可行：pre_exec 动态 /proc/<pid> 成立（信号安全 + self 放行 + 别的 pid 堵住）");
+        eprintln!("✅ experiment B feasible: pre_exec dynamic /proc/<pid> works (signal-safe + self allowed + other pid blocked)");
     } else {
-        eprintln!("❌ 实验 B 不可行或需调整（见上方输出）");
+        eprintln!("❌ experiment B infeasible or needs adjustment (see output above)");
     }
 }

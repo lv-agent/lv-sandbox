@@ -45,7 +45,7 @@ pub fn detect() -> CgroupAvailability {
             controllers: vec![],
             can_create_subgroup: false,
             can_migrate_processes: false,
-            reason: Some("/sys/fs/cgroup 不存在".into()),
+            reason: Some("/sys/fs/cgroup does not exist".into()),
         };
     }
 
@@ -59,7 +59,7 @@ pub fn detect() -> CgroupAvailability {
                 controllers: vec![],
                 can_create_subgroup: false,
                 can_migrate_processes: false,
-                reason: Some("无法读取 /proc/self/cgroup".into()),
+                reason: Some("failed to read /proc/self/cgroup".into()),
             };
         }
     };
@@ -80,7 +80,7 @@ pub fn detect() -> CgroupAvailability {
         reason: if can_create {
             None
         } else {
-            Some("当前用户无权在 cgroup 目录创建子组".into())
+            Some("current user cannot create sub-cgroup".into())
         },
     }
 }

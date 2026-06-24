@@ -21,14 +21,14 @@ pub async fn create_test_app() -> (tempfile::TempDir, Router) {
 
 /// 创建指定并发数的 HTTP 测试 app
 pub async fn create_test_app_with_concurrency(max: usize) -> (tempfile::TempDir, Router) {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let config = SandboxConfig {
         sandbox_base_dir: tmp.path().to_path_buf(),
         disk_watermark_bytes: 1024 * 1024 * 1024,
     };
     let runner = SandboxRunner::new(&config)
         .await
-        .expect("创建 runner 失败");
+        .expect("failed to create runner");
     let scheduler = Arc::new(Scheduler::new(Arc::new(runner), max));
     let state = AppState {
         scheduler,
@@ -41,14 +41,14 @@ pub async fn create_test_app_with_concurrency(max: usize) -> (tempfile::TempDir,
 pub async fn create_test_app_with_profiles(
     profiles: Vec<sandbox_core::profile::SandboxProfile>,
 ) -> (tempfile::TempDir, Router) {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let config = SandboxConfig {
         sandbox_base_dir: tmp.path().to_path_buf(),
         disk_watermark_bytes: 1024 * 1024 * 1024,
     };
     let mut runner = SandboxRunner::new(&config)
         .await
-        .expect("创建 runner 失败");
+        .expect("failed to create runner");
     for profile in profiles {
         runner.register_profile(profile);
     }
@@ -62,14 +62,14 @@ pub async fn create_test_app_with_profiles(
 
 /// 创建原始 SandboxRunner（无 HTTP 层）
 pub async fn create_test_runner() -> (tempfile::TempDir, SandboxRunner) {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let config = SandboxConfig {
         sandbox_base_dir: tmp.path().to_path_buf(),
         disk_watermark_bytes: 1024 * 1024 * 1024,
     };
     let runner = SandboxRunner::new(&config)
         .await
-        .expect("创建 runner 失败");
+        .expect("failed to create runner");
     (tmp, runner)
 }
 
@@ -221,7 +221,7 @@ pub async fn submit_and_wait_with_input(
     assert!(
         create_resp.status() == axum::http::StatusCode::ACCEPTED
             || create_resp.status() == axum::http::StatusCode::OK,
-        "create 应返回 202/200，实际: {}",
+        "create should return 202/200, actual: {}",
         create_resp.status()
     );
 
@@ -243,5 +243,5 @@ pub async fn submit_and_wait_with_input(
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("submit_and_wait 超时：job {} 10s 内未完成", job_id);
+    panic!("submit_and_wait timeout: job {} did not finish within 10s", job_id);
 }

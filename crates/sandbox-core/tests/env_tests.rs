@@ -8,7 +8,7 @@ use std::path::Path;
 use sandbox_core::env::build_sanitized_env;
 
 #[test]
-fn 基础白名单包含_path_home_tmpdir_lang() {
+fn base_allowlist_contains_path_home_tmpdir_lang() {
     let workspace = Path::new("/sandboxes/job-001");
     let extra = HashMap::new();
 
@@ -23,7 +23,7 @@ fn 基础白名单包含_path_home_tmpdir_lang() {
 }
 
 #[test]
-fn 自定义环境变量追加到白名单() {
+fn custom_env_vars_appended_to_allowlist() {
     let workspace = Path::new("/sandboxes/job-001");
     let mut extra = HashMap::new();
     extra.insert("MY_VAR".to_string(), "my_value".to_string());
@@ -39,7 +39,7 @@ fn 自定义环境变量追加到白名单() {
 }
 
 #[test]
-fn 允许的代理变量被加入白名单() {
+fn allowed_proxy_vars_added_to_allowlist() {
     let workspace = Path::new("/sandboxes/job-001");
     let mut extra = HashMap::new();
     extra.insert("HTTP_PROXY".to_string(), "http://proxy:8080".to_string());
@@ -54,7 +54,7 @@ fn 允许的代理变量被加入白名单() {
 }
 
 #[test]
-fn ssl证书变量被加入白名单() {
+fn ssl_cert_vars_added_to_allowlist() {
     let workspace = Path::new("/sandboxes/job-001");
     let mut extra = HashMap::new();
     extra.insert("SSL_CERT_FILE".to_string(), "/etc/ssl/certs/ca.pem".to_string());
@@ -67,7 +67,7 @@ fn ssl证书变量被加入白名单() {
 }
 
 #[test]
-fn tz变量被加入白名单() {
+fn tz_var_added_to_allowlist() {
     let workspace = Path::new("/sandboxes/job-001");
     let mut extra = HashMap::new();
     extra.insert("TZ".to_string(), "Asia/Shanghai".to_string());
@@ -78,7 +78,7 @@ fn tz变量被加入白名单() {
 }
 
 #[test]
-fn 不同job_id使用不同路径() {
+fn different_job_ids_use_different_paths() {
     let env_a = build_sanitized_env(
         "job-001",
         Path::new("/sandboxes/job-001"),
@@ -97,7 +97,7 @@ fn 不同job_id使用不同路径() {
 }
 
 #[test]
-fn 不继承任何隐式变量() {
+fn does_not_inherit_any_implicit_vars() {
     let workspace = Path::new("/sandboxes/job-001");
     let env = build_sanitized_env("job-001", workspace, &HashMap::new());
 

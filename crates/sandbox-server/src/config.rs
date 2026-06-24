@@ -176,7 +176,7 @@ impl ProfileConfig {
 
         // timeout 解析
         let default_timeout = match &self.default_timeout {
-            Some(t) => parse_duration(t).ok_or_else(|| format!("无效的 timeout 格式: {t}"))?,
+            Some(t) => parse_duration(t).ok_or_else(|| format!("invalid timeout format: {t}"))?,
             None => default_profile.default_timeout,
         };
 
@@ -253,13 +253,13 @@ impl AppConfig {
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self, anyhow::Error> {
         let path = path.as_ref();
         if !path.exists() {
-            tracing::info!(path = %path.display(), "配置文件不存在，使用默认配置");
+            tracing::info!(path = %path.display(), "config file not found, using defaults");
             return Ok(Self::default());
         }
 
         let content = std::fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&content)?;
-        tracing::info!(path = %path.display(), "配置文件加载成功");
+        tracing::info!(path = %path.display(), "config loaded");
         Ok(config)
     }
 
@@ -283,7 +283,7 @@ impl AppConfig {
         for (name, pc) in &self.profiles {
             match pc.to_profile(name, &self.sandbox) {
                 Ok(profile) => registry.register(profile),
-                Err(e) => tracing::warn!(profile = %name, error = %e, "profile 配置无效，跳过"),
+                Err(e) => tracing::warn!(profile = %name, error = %e, "invalid profile config, skipping"),
             }
         }
 
@@ -320,17 +320,17 @@ pub async fn build_runner_from_config(
     for (name, pc) in &config.profiles {
         match pc.to_profile(name, &config.sandbox) {
             Ok(profile) => {
-                tracing::info!(profile = %name, "注册 profile");
+                tracing::info!(profile = %name, "registered profile");
                 runner.register_profile(profile);
             }
             Err(e) => {
-                tracing::warn!(profile = %name, error = %e, "profile 配置无效");
+                tracing::warn!(profile = %name, error = %e, "invalid profile config");
                 errors.push(format!("{name}: {e}"));
             }
         }
     }
     if !errors.is_empty() {
-        anyhow::bail!("profile 配置无效，拒绝加载: {}", errors.join("; "));
+        anyhow::bail!("invalid profile config, refusing to load: {}", errors.join("; "));
     }
     let profiles = runner.profile_registry().names();
     Ok((runner, profiles))

@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-seccomp"
-description = "seccomp-BPF 管理：filter 构建器、denylist、clone namespace flag 过滤"
+description = "seccomp-BPF management: filter builder, denylist, clone namespace flag filtering"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

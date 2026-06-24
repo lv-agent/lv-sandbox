@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use sandbox_e2e::helpers::*;
 
 #[tokio::test]
-async fn health检查返回200() {
+async fn health_check_returns_200() {
     let (_tmp, app) = create_test_app().await;
     let response = app
         .oneshot(
@@ -26,7 +26,7 @@ async fn health检查返回200() {
 }
 
 #[tokio::test]
-async fn submit_job正常执行() {
+async fn submit_job_executes_normally() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) =
         submit_and_wait(app, "e2e-001", &["/bin/echo", "hello"], "shell", "5s", HashMap::new())
@@ -41,7 +41,7 @@ async fn submit_job正常执行() {
 
 /// cr-018+#72: 提交带 stdin 的任务，子进程（cat）应读到 stdin 并输出
 #[tokio::test]
-async fn submit_job带stdin_任务能读到输入() {
+async fn submit_job_with_stdin_can_read_input() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait_with_input(
         app,
@@ -59,13 +59,13 @@ async fn submit_job带stdin_任务能读到输入() {
     assert_eq!(
         result["stdout"].as_str().unwrap(),
         "hello via stdin\n",
-        "cat 应把 stdin 原样输出"
+        "cat should echo stdin verbatim"
     );
 }
 
 /// cr-018+#78: 任务输出含敏感信息（Bearer token）应在 GET /jobs/{id} 被脱敏
 #[tokio::test]
-async fn 任务输出敏感信息被脱敏() {
+async fn sensitive_job_output_is_redacted() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,
@@ -82,15 +82,15 @@ async fn 任务输出敏感信息被脱敏() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let stdout = result["stdout"].as_str().unwrap();
-    assert!(stdout.contains("REDACTED"), "Bearer 应脱敏: {stdout}");
+    assert!(stdout.contains("REDACTED"), "Bearer should be redacted: {stdout}");
     assert!(
         !stdout.contains("secret123token"),
-        "token 不应残留: {stdout}"
+        "token should not leak: {stdout}"
     );
 }
 
 #[tokio::test]
-async fn submit_job_profile不存在进入error终态() {
+async fn submit_job_nonexistent_profile_enters_error_terminal() {
     // cr-018 后 create_job 不再预校验 profile：submit_async 会注册任务，
     // run_job 因 profile 缺失失败 → Done(Error)。
     let (_tmp, app) = create_test_app().await;
@@ -107,13 +107,13 @@ async fn submit_job_profile不存在进入error终态() {
     let status_str = result["status"].as_str().unwrap();
     assert!(
         status_str.contains("Error"),
-        "不存在 profile 应进入 Error 终态，实际 status: {}",
+        "nonexistent profile should enter Error terminal state, actual status: {}",
         status_str
     );
 }
 
 #[tokio::test]
-async fn submit_job_无效json返回400() {
+async fn submit_job_invalid_json_returns_400() {
     let (_tmp, app) = create_test_app().await;
     let req = Request::builder()
         .method("POST")
@@ -126,7 +126,7 @@ async fn submit_job_无效json返回400() {
 }
 
 #[tokio::test]
-async fn submit_job_无效timeout返回400() {
+async fn submit_job_invalid_timeout_returns_400() {
     // create_job 在 submit_async 之前校验 timeout 格式，无效 → 直接 400（不会注册 job）。
     let (_tmp, app) = create_test_app().await;
     let body = serde_json::json!({
@@ -150,13 +150,13 @@ async fn submit_job_无效timeout返回400() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(
         json["error"].as_str().unwrap().contains("timeout"),
-        "错误信息应说明 timeout，实际: {}",
+        "error message should mention timeout, actual: {}",
         json["error"]
     );
 }
 
 #[tokio::test]
-async fn status返回worker信息() {
+async fn status_returns_worker_info() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = send_and_parse::<serde_json::Value>(
         app,

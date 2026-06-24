@@ -40,36 +40,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bearer_token被脱敏() {
+    fn bearer_token_redacted() {
         let r = redact("Authorization: Bearer eyJhbGc.iOiJKV1QiLCJ.abc123");
-        assert!(r.contains("[REDACTED]"), "Bearer 应脱敏: {r}");
-        assert!(!r.contains("eyJhbGc"), "token 内容不应残留: {r}");
+        assert!(r.contains("[REDACTED]"), "Bearer should be redacted: {r}");
+        assert!(!r.contains("eyJhbGc"), "token content should not leak: {r}");
     }
 
     #[test]
-    fn aws_access_key被脱敏() {
+    fn aws_access_key_redacted() {
         let r = redact("aws_access_key_id = AKIAIOSFODNN7EXAMPLE");
-        assert!(r.contains("[REDACTED]"), "AKIA 应脱敏: {r}");
+        assert!(r.contains("[REDACTED]"), "AKIA should be redacted: {r}");
         assert!(!r.contains("AKIAIOSFODNN7EXAMPLE"));
     }
 
     #[test]
-    fn github_token被脱敏() {
+    fn github_token_redacted() {
         let r = redact("token = ghp_1234567890abcdefghijklmnopqrstuvwxyz");
-        assert!(r.contains("[REDACTED]"), "gh token 应脱敏: {r}");
+        assert!(r.contains("[REDACTED]"), "gh token should be redacted: {r}");
         assert!(!r.contains("ghp_1234567890abcdefghijklmnopqrstuvwxyz"));
     }
 
     #[test]
-    fn 私钥被脱敏() {
+    fn private_key_redacted() {
         let s = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
         let r = redact(s);
-        assert!(r.contains("REDACTED"), "私钥应脱敏: {r}");
+        assert!(r.contains("REDACTED"), "private key should be redacted: {r}");
         assert!(!r.contains("MIIE"));
     }
 
     #[test]
-    fn 无敏感内容原样返回() {
+    fn no_secrets_passed_through() {
         let r = redact("hello world\nnormal output 42");
         assert_eq!(r, "hello world\nnormal output 42");
     }

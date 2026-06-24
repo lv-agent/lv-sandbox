@@ -8,7 +8,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 #[test]
-fn builder链式调用生成正确的配置() {
+fn builder_chaining_produces_correct_config() {
     let config = RlimitConfig::new()
         .cpu_seconds(2)
         .nofile(64)
@@ -29,7 +29,7 @@ fn builder链式调用生成正确的配置() {
 }
 
 #[test]
-fn 预设shell_profile值正确() {
+fn preset_shell_profile_values_correct() {
     let config = sandbox_core::rlimit::shell_default();
 
     assert_eq!(config.cpu_seconds, Some(2));
@@ -41,7 +41,7 @@ fn 预设shell_profile值正确() {
 }
 
 #[test]
-fn 预设python_profile值正确() {
+fn preset_python_profile_values_correct() {
     let config = sandbox_core::rlimit::python_default();
 
     assert_eq!(config.cpu_seconds, Some(2));
@@ -51,7 +51,7 @@ fn 预设python_profile值正确() {
 }
 
 #[test]
-fn apply_在子进程中生效_nofile限制() {
+fn apply_takes_effect_in_child_nofile_limit() {
     let config = RlimitConfig::new().nofile(16);
     let config_clone = config.clone();
 
@@ -60,22 +60,22 @@ fn apply_在子进程中生效_nofile限制() {
             .arg("-c")
             .arg("echo NOFILE=$(ulimit -n)")
             .pre_exec(move || {
-                config_clone.apply().expect("rlimit apply 失败");
+                config_clone.apply().expect("rlimit apply failed");
                 Ok(())
             })
             .output()
-            .expect("执行失败")
+            .expect("execution failed")
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("NOFILE=16"),
-        "期望 NOFILE=16，实际输出: {stdout}"
+        "expected NOFILE=16, actual output: {stdout}"
     );
 }
 
 #[test]
-fn apply_在子进程中生效_fsize限制() {
+fn apply_takes_effect_in_child_fsize_limit() {
     let config = RlimitConfig::new().fsize_mb(1);
     let config_clone = config.clone();
 
@@ -85,22 +85,22 @@ fn apply_在子进程中生效_fsize限制() {
             .arg("dd if=/dev/zero of=/tmp/rlimit_test_bigfile bs=1M count=2 2>&1; echo EXIT=$?")
             .env("TMPDIR", "/tmp")
             .pre_exec(move || {
-                config_clone.apply().expect("rlimit apply 失败");
+                config_clone.apply().expect("rlimit apply failed");
                 Ok(())
             })
             .output()
-            .expect("执行失败")
+            .expect("execution failed")
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("EXIT="),
-        "应有 EXIT 输出: {stdout}"
+        "should have EXIT output: {stdout}"
     );
 }
 
 #[test]
-fn 空配置apply不报错() {
+fn empty_config_apply_does_not_error() {
     let config = RlimitConfig::new();
     let config_clone = config.clone();
 
@@ -109,11 +109,11 @@ fn 空配置apply不报错() {
             .arg("-c")
             .arg("echo OK")
             .pre_exec(move || {
-                config_clone.apply().expect("空配置 apply 不应报错");
+                config_clone.apply().expect("empty config apply should not error");
                 Ok(())
             })
             .output()
-            .expect("执行失败")
+            .expect("execution failed")
     };
 
     assert_eq!(output.status.code(), Some(0));

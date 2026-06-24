@@ -9,7 +9,7 @@ use tower::ServiceExt;
 use sandbox_e2e::helpers::*;
 
 #[tokio::test]
-async fn 不存在的命令返回非零退出码() {
+async fn missing_command_returns_nonzero_exit() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,
@@ -26,13 +26,13 @@ async fn 不存在的命令返回非零退出码() {
     let exit = result.get("exit_code").and_then(|v| v.as_i64());
     assert!(
         exit.is_none() || exit != Some(0),
-        "不存在的命令应返回非零退出码（或 spawn 失败 exit_code 缺失），实际: {:?}",
+        "missing command should return nonzero exit (or spawn-fail missing exit_code), actual: {:?}",
         exit
     );
 }
 
 #[tokio::test]
-async fn 超大stdout被截断() {
+async fn oversized_stdout_truncated() {
     let (_tmp, app) = create_test_app().await;
     // 生成大量输出（超过 5MB shell profile 默认限制）
     let (status, result) = submit_and_wait(
@@ -54,13 +54,13 @@ async fn 超大stdout被截断() {
     // 默认 max_stdout_bytes = 5MB，stdout 应被截断到此范围内
     assert!(
         stdout_len <= 5 * 1024 * 1024,
-        "stdout 应被截断到 5MB 以内, 实际: {} bytes",
+        "stdout should be truncated to <=5MB, actual: {} bytes",
         stdout_len
     );
 }
 
 #[tokio::test]
-async fn stdin数据正确传递() {
+async fn stdin_passed_correctly() {
     let (_tmp, runner) = create_test_runner().await;
     let req = sandbox_core::job::JobRequest {
         job_id: "stdin-001".to_string(),
@@ -71,19 +71,19 @@ async fn stdin数据正确传递() {
         stdin_data: Some(b"hello from stdin".to_vec()),
     };
     // 需要用 runner 直接调用（HTTP API 不支持 stdin）
-    let result = runner.run_job(req).await.expect("执行失败");
+    let result = runner.run_job(req).await.expect("execution failed");
 
     assert_eq!(result.exit_code, Some(0));
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(
         stdout.contains("hello from stdin"),
-        "stdin 数据应传递到子进程, stdout: {}",
+        "stdin should reach child, stdout: {}",
         stdout
     );
 }
 
 #[tokio::test]
-async fn 重复job_id两次都完成() {
+async fn duplicate_job_id_both_complete() {
     let (_tmp, app) = create_test_app().await;
     // cr-018: 同一 job_id 在同一 app 内第二次 submit_async 会覆盖 jobs 表项，
     // 这里验证两次 create_job 都返回 202（不报错）。第一次提交即等待完成，
@@ -119,7 +119,7 @@ async fn 重复job_id两次都完成() {
 }
 
 #[tokio::test]
-async fn 非零退出码正确返回() {
+async fn nonzero_exit_code_returned() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,

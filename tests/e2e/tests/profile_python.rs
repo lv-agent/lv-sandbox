@@ -30,7 +30,7 @@ async fn python_profile_echo_via_http() {
 }
 
 #[tokio::test]
-async fn python_profile_环境变量隔离() {
+async fn python_profile_env_isolation() {
     let (_tmp, app) = create_test_app().await;
     let mut env = HashMap::new();
     env.insert("MY_TEST_VAR".to_string(), "secret_value".to_string());
@@ -43,7 +43,7 @@ async fn python_profile_环境变量隔离() {
 }
 
 #[tokio::test]
-async fn python_profile_stderr被正确捕获() {
+async fn python_profile_stderr_captured_correctly() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,
@@ -59,13 +59,13 @@ async fn python_profile_stderr被正确捕获() {
     let stderr = result["stderr"].as_str().unwrap();
     assert!(
         stderr.contains("stderr_msg"),
-        "stderr 应被捕获, 实际: {}",
+        "stderr should be captured, actual: {}",
         stderr
     );
 }
 
 #[tokio::test]
-async fn python_profile_非零退出码() {
+async fn python_profile_nonzero_exit() {
     let (_tmp, app) = create_test_app().await;
     let (status, result) = submit_and_wait(
         app,

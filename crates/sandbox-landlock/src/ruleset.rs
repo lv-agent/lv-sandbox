@@ -28,7 +28,7 @@ impl PreparedRuleset {
     ) -> Result<Self, LandlockError> {
         if !caps.supported || !caps.fs_access {
             return Err(LandlockError::Unavailable(
-                "内核不支持 Landlock 或不支持文件系统访问控制".into(),
+                "kernel lacks Landlock / filesystem access control".into(),
             ));
         }
 
@@ -51,14 +51,14 @@ impl PreparedRuleset {
             // 路径必须存在才能创建 PathFd
             let path = Path::new(&rule.path);
             if !path.exists() {
-                tracing::debug!("跳过不存在的路径: {:?}", path);
+                tracing::debug!("skipping non-existent path: {:?}", path);
                 continue;
             }
 
             let path_fd = match PathFd::new(path) {
                 Ok(fd) => fd,
                 Err(e) => {
-                    tracing::debug!("跳过无法打开的路径 {:?}: {}", path, e);
+                    tracing::debug!("skipping unopenable path {:?}: {}", path, e);
                     continue;
                 }
             };
@@ -82,7 +82,7 @@ impl PreparedRuleset {
         let mut created = self
             .inner
             .take()
-            .ok_or_else(|| LandlockError::RestrictSelf("ruleset 已被消费".into()))?;
+            .ok_or_else(|| LandlockError::RestrictSelf("ruleset already consumed".into()))?;
 
         // cr-017: 动态放行 /proc/<自己的 pid>（pre_exec 时 getpid = exec 进程的 pid）
         let pid = unsafe { libc::getpid() };
@@ -92,11 +92,11 @@ impl PreparedRuleset {
                 let read = AccessFs::from_read(self.abi);
                 created = created
                     .add_rule(PathBeneath::new(fd, read))
-                    .map_err(|e| LandlockError::RuleAdd(format!("动态 /proc/<pid>: {e}")))?;
+                    .map_err(|e| LandlockError::RuleAdd(format!("dynamic /proc/<pid>: {e}")))?;
             }
             Err(e) => {
                 // 降级：打不开 /proc/<pid>（罕见）则不放行 self，任务读 /proc/self 会失败但不崩溃
-                tracing::warn!(path = %self_proc, error = %e, "动态放行 /proc/<pid> 失败，降级");
+                tracing::warn!(path = %self_proc, error = %e, "failed to grant dynamic /proc/<pid>, degrading");
             }
         }
 
@@ -134,7 +134,7 @@ fn abi_from_version(v: u32) -> Result<ABI, LandlockError> {
         5 => Ok(ABI::V5),
         6 => Ok(ABI::V6),
         _ => {
-            tracing::warn!("未知的 Landlock ABI 版本 {}，使用 V7 作为最佳近似", v);
+            tracing::warn!("unknown Landlock ABI version {}, using V7 as closest approximation", v);
             Ok(ABI::V7)
         }
     }

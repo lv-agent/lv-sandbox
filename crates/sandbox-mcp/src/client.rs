@@ -52,13 +52,13 @@ impl SandboxHttpClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("submit 失败: HTTP {}", resp.status()));
+            return Err(anyhow!("submit failed: HTTP {}", resp.status()));
         }
         // 轮询 GET /jobs/{id} 直到终态（上限 300s）
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         loop {
             if std::time::Instant::now() > deadline {
-                return Err(anyhow!("job {} 轮询超时（300s）", job_id));
+                return Err(anyhow!("job {} polling timed out (300s)", job_id));
             }
             let get = self
                 .client
@@ -66,7 +66,7 @@ impl SandboxHttpClient {
                 .send()
                 .await?;
             if !get.status().is_success() {
-                return Err(anyhow!("get_job 失败: HTTP {}", get.status()));
+                return Err(anyhow!("get_job failed: HTTP {}", get.status()));
             }
             let json: serde_json::Value = get.json().await?;
             if json["status"].as_str() == Some("Running") {
@@ -94,7 +94,7 @@ impl SandboxHttpClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("get_profiles 失败: HTTP {}", resp.status()));
+            return Err(anyhow!("get_profiles failed: HTTP {}", resp.status()));
         }
         Ok(resp.json::<ProfilesInfo>().await?)
     }
@@ -107,7 +107,7 @@ impl SandboxHttpClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("get_status 失败: HTTP {}", resp.status()));
+            return Err(anyhow!("get_status failed: HTTP {}", resp.status()));
         }
         Ok(resp.json::<StatusInfo>().await?)
     }
@@ -122,7 +122,7 @@ impl SandboxHttpClient {
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("reload 失败: HTTP {}", resp.status()));
+            return Err(anyhow!("reload failed: HTTP {}", resp.status()));
         }
         Ok(resp.json::<ReloadInfo>().await?)
     }
@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_发送请求并解析响应() {
+    async fn submit_sends_and_parses() {
         let server = MockServer::start().await;
         // POST /jobs → 202 Running
         Mock::given(method("POST"))
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_未提供job_id自动生成非空() {
+    async fn submit_auto_generates_job_id() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/jobs"))
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_profiles_返回profile列表() {
+    async fn get_profiles_returns_list() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/profiles"))
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_status_返回worker状态() {
+    async fn get_status_returns_worker_state() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/status"))
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_返回新profile列表() {
+    async fn reload_returns_new_profiles() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/reload"))
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_server错误返回错误() {
+    async fn submit_server_error_returns_err() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v1/jobs"))
@@ -292,6 +292,6 @@ mod tests {
 
         let client = SandboxHttpClient::new(server.uri()).unwrap();
         let result = client.submit(&run_params(None)).await;
-        assert!(result.is_err(), "5xx 应返回错误");
+        assert!(result.is_err(), "5xx should return error");
     }
 }

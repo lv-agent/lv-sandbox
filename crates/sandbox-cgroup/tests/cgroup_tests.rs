@@ -67,32 +67,32 @@ fn try_create_subgroup(path: &std::path::Path) -> bool {
 // ==================== 检测 ====================
 
 #[test]
-fn cgroup_v2检测_返回有效结构() {
+fn cgroup_v2_detect_returns_valid_structure() {
     let avail = detect();
 
     // 在此环境中 cgroup v2 应该可用
     if avail.available {
         assert!(
             avail.cgroup_path.is_some(),
-            "可用时应有 cgroup_path"
+            "cgroup_path should be Some when available"
         );
         assert!(
             !avail.controllers.is_empty(),
-            "应有至少一个控制器"
+            "should have at least one controller"
         );
     } else {
-        eprintln!("cgroup v2 不可用: {:?}", avail.reason);
+        eprintln!("cgroup v2 unavailable: {:?}", avail.reason);
     }
 }
 
 // ==================== JobCgroup ====================
 
 #[test]
-fn job_cgroup_创建成功() {
+fn job_cgroup_creates_successfully() {
     let parent = match writable_cgroup_parent() {
         Some(p) => p,
         None => {
-            eprintln!("跳过: 无可写的 cgroup 目录");
+            eprintln!("skipping: no writable cgroup directory");
             return;
         }
     };
@@ -113,31 +113,31 @@ fn job_cgroup_创建成功() {
         &avail,
     );
 
-    assert!(cg.is_ok(), "创建 cgroup 应成功: {:?}", cg.err());
+    assert!(cg.is_ok(), "cgroup creation should succeed: {:?}", cg.err());
 
     let cg = cg.unwrap();
     let cg_path = cg.path().clone();
 
     // 验证目录存在
-    assert!(cg_path.exists(), "cgroup 目录应存在");
+    assert!(cg_path.exists(), "cgroup directory should exist");
 
     // 验证 cgroup.procs 文件存在
     assert!(
         cg_path.join("cgroup.procs").exists(),
-        "cgroup.procs 应存在"
+        "cgroup.procs should exist"
     );
 
     // 销毁
-    cg.destroy().expect("销毁不应失败");
-    assert!(!cg_path.exists(), "销毁后目录应被删除");
+    cg.destroy().expect("destroy should not fail");
+    assert!(!cg_path.exists(), "directory should be removed after destroy");
 }
 
 #[test]
-fn job_cgroup_资源限制写入() {
+fn job_cgroup_writes_resource_limits() {
     let parent = match writable_cgroup_parent() {
         Some(p) => p,
         None => {
-            eprintln!("跳过: 无可写的 cgroup 目录");
+            eprintln!("skipping: no writable cgroup directory");
             return;
         }
     };
@@ -156,38 +156,38 @@ fn job_cgroup_资源限制写入() {
         Path::new(&parent),
         &resources,
         &avail,
-    ).expect("创建应成功");
+    ).expect("create should succeed");
 
     let cg_path = cg.path().clone();
 
     // 验证 memory.max
     let mem_max = std::fs::read_to_string(cg_path.join("memory.max"))
-        .expect("应能读取 memory.max");
-    assert_eq!(mem_max.trim(), "52428800", "memory.max 应为 50MB");
+        .expect("should be able to read memory.max");
+    assert_eq!(mem_max.trim(), "52428800", "memory.max should be 50MB");
 
     // 验证 pids.max
     let pids_max = std::fs::read_to_string(cg_path.join("pids.max"))
-        .expect("应能读取 pids.max");
-    assert_eq!(pids_max.trim(), "16", "pids.max 应为 16");
+        .expect("should be able to read pids.max");
+    assert_eq!(pids_max.trim(), "16", "pids.max should be 16");
 
     // 验证 cpu.max
     let cpu_max = std::fs::read_to_string(cg_path.join("cpu.max"))
-        .expect("应能读取 cpu.max");
+        .expect("should be able to read cpu.max");
     assert!(
         cpu_max.trim().starts_with("100000 200000"),
-        "cpu.max 应为 '100000 200000': {}",
+        "cpu.max should be '100000 200000': {}",
         cpu_max.trim()
     );
 
-    cg.destroy().expect("销毁不应失败");
+    cg.destroy().expect("destroy should not fail");
 }
 
 #[test]
-fn job_cgroup_进程迁移() {
+fn job_cgroup_migrates_process() {
     let parent = match writable_cgroup_parent() {
         Some(p) => p,
         None => {
-            eprintln!("跳过: 无可写的 cgroup 目录");
+            eprintln!("skipping: no writable cgroup directory");
             return;
         }
     };
@@ -206,7 +206,7 @@ fn job_cgroup_进程迁移() {
         Path::new(&parent),
         &resources,
         &avail,
-    ).expect("创建应成功");
+    ).expect("create should succeed");
 
     let cg_path = cg.path().clone();
 
@@ -214,7 +214,7 @@ fn job_cgroup_进程迁移() {
     let mut child = std::process::Command::new("/bin/sleep")
         .arg("5")
         .spawn()
-        .expect("启动子进程失败");
+        .expect("failed to spawn child process");
     let pid = child.id();
 
     // 尝试迁移子进程到 cgroup
@@ -223,21 +223,21 @@ fn job_cgroup_进程迁移() {
         Ok(()) => {
             // 验证进程在 cgroup 中
             let procs = std::fs::read_to_string(cg_path.join("cgroup.procs"))
-                .expect("应能读取 cgroup.procs");
+                .expect("should be able to read cgroup.procs");
             assert!(
                 procs.contains(&pid.to_string()),
-                "cgroup.procs 应包含 PID {}: {}",
+                "cgroup.procs should contain PID {}: {}",
                 pid,
                 procs
             );
 
             // 列出进程
-            let listed = cg.processes().expect("列出进程不应失败");
-            assert!(listed.contains(&pid), "processes() 应包含 PID {}", pid);
+            let listed = cg.processes().expect("listing processes should not fail");
+            assert!(listed.contains(&pid), "processes() should contain PID {}", pid);
         }
         Err(e) => {
             // 迁移失败在受限环境下是预期的（nsdelegate、跨 cgroup 树等）
-            eprintln!("进程迁移跳过（环境限制）: {}", e);
+            eprintln!("process migration skipped (environment restriction): {}", e);
         }
     }
 
@@ -246,15 +246,15 @@ fn job_cgroup_进程迁移() {
     let _ = child.wait();
 
     // 销毁 cgroup
-    cg.destroy().expect("销毁不应失败");
+    cg.destroy().expect("destroy should not fail");
 }
 
 #[test]
-fn job_cgroup_资源使用统计() {
+fn job_cgroup_reports_resource_usage() {
     let parent = match writable_cgroup_parent() {
         Some(p) => p,
         None => {
-            eprintln!("跳过: 无可写的 cgroup 目录");
+            eprintln!("skipping: no writable cgroup directory");
             return;
         }
     };
@@ -273,27 +273,27 @@ fn job_cgroup_资源使用统计() {
         Path::new(&parent),
         &resources,
         &avail,
-    ).expect("创建应成功");
+    ).expect("create should succeed");
 
     // 空 cgroup 应能读取统计
-    let usage = cg.resource_usage().expect("读取统计不应失败");
+    let usage = cg.resource_usage().expect("reading usage should not fail");
     // 空 cgroup 的 memory_current 应为 0 或很小
     if let Some(mem) = usage.memory_current {
-        assert!(mem < 1024 * 1024, "空 cgroup 内存应很小: {}", mem);
+        assert!(mem < 1024 * 1024, "empty cgroup memory should be small: {}", mem);
     }
 
-    cg.destroy().expect("销毁不应失败");
+    cg.destroy().expect("destroy should not fail");
 }
 
 #[test]
-fn job_cgroup_不可用时创建返回错误() {
+fn job_cgroup_create_returns_err_when_unavailable() {
     let avail = CgroupAvailability {
         available: false,
         cgroup_path: None,
         controllers: vec![],
         can_create_subgroup: false,
         can_migrate_processes: false,
-        reason: Some("测试不可用".into()),
+        reason: Some("test unavailable".into()),
     };
 
     let resources = CgroupResources {
@@ -311,5 +311,5 @@ fn job_cgroup_不可用时创建返回错误() {
         &avail,
     );
 
-    assert!(result.is_err(), "不可用时应返回错误");
+    assert!(result.is_err(), "should return error when unavailable");
 }

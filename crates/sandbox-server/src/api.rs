@@ -204,7 +204,7 @@ async fn create_job(
             None => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: format!("profile 不存在: {}", req.profile_name),
+                    error: format!("profile not found: {}", req.profile_name),
                 }),
             )
                 .into_response(),
@@ -218,7 +218,7 @@ async fn create_job(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
-                        error: format!("无效的 timeout 格式: {t}"),
+                        error: format!("invalid timeout format: {t}"),
                     }),
                 )
                     .into_response();
@@ -289,7 +289,7 @@ async fn get_job(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "任务不存在或已过期".into(),
+                error: "job not found or expired".into(),
             }),
         )
             .into_response(),
@@ -314,14 +314,14 @@ async fn cancel_job(
         Err(CancelError::NotFound) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: "任务不存在".into(),
+                error: "job not found".into(),
             }),
         )
             .into_response(),
         Err(CancelError::AlreadyDone) => (
             StatusCode::CONFLICT,
             Json(ErrorResponse {
-                error: "任务已完成，无法取消".into(),
+                error: "job already finished, cannot cancel".into(),
             }),
         )
             .into_response(),
@@ -372,7 +372,7 @@ async fn reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 StatusCode::OK,
                 Json(ReloadResponse {
                     success: true,
-                    message: format!("从 {} 重新加载 {} 个 profile", path, profiles.len()),
+                    message: format!("reloaded {} profiles from {}", profiles.len(), path),
                     profiles_loaded: profiles,
                 }),
             )
@@ -382,7 +382,7 @@ async fn reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ReloadResponse {
                 success: false,
-                message: format!("reload 失败: {e}"),
+                message: format!("reload failed: {e}"),
                 profiles_loaded: vec![],
             }),
         )
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profiles_返回内置profile列表() {
+    async fn profiles_returns_builtin_list() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
 
@@ -452,7 +452,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let mut profiles = json["profiles"]
             .as_array()
-            .expect("profiles 应为数组")
+            .expect("profiles should be an array")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect::<Vec<_>>();
@@ -462,7 +462,7 @@ mod tests {
 
     /// cr-018+#76: /health 报告安全机制就绪等级（landlock/cgroup/seccomp）
     #[tokio::test]
-    async fn health_报告安全机制就绪等级() {
+    async fn health_reports_security_readiness() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
         let response = app
@@ -489,7 +489,7 @@ mod tests {
 
     /// cr-018+#77: dry-run 返回 profile 摘要，不执行任务
     #[tokio::test]
-    async fn create_job_dry_run返回profile摘要不执行() {
+    async fn create_job_dry_run_returns_profile_summary() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
         let body = serde_json::json!({
@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_重新加载配置返回新profile列表() {
+    async fn reload_returns_new_profile_list() {
         let tmp = tempfile::tempdir().unwrap();
         let base_dir = tmp.path().join("sandboxes");
         let config_path = tmp.path().join("config.yaml");
@@ -569,20 +569,20 @@ profiles:
         assert_eq!(json["success"], true);
         let profiles: Vec<String> = json["profiles_loaded"]
             .as_array()
-            .expect("profiles_loaded 应为数组")
+            .expect("profiles_loaded should be an array")
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
         assert!(
             profiles.contains(&"custom_task".to_string()),
-            "reload 后应包含 custom_task, 实际: {:?}",
+            "reload should include custom_task, actual: {:?}",
             profiles
         );
     }
 
     /// cr-018+#77: reload 时 profile 无效（timeout 格式错）应失败，不静默跳过
     #[tokio::test]
-    async fn reload_无效profile配置返回失败() {
+    async fn reload_invalid_profile_returns_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("bad.yaml");
         let yaml = r#"
@@ -619,7 +619,7 @@ profiles:
         assert_eq!(
             response.status(),
             StatusCode::INTERNAL_SERVER_ERROR,
-            "无效 profile 应导致 reload 失败"
+            "invalid profile should fail reload"
         );
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -630,7 +630,7 @@ profiles:
 
     /// cr-018: GET /jobs/{不存在} → 404
     #[tokio::test]
-    async fn get_job_不存在返回404() {
+    async fn get_job_missing_returns_404() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
         let response = app
@@ -648,7 +648,7 @@ profiles:
 
     /// cr-018: POST /jobs/{不存在}/cancel → 404
     #[tokio::test]
-    async fn cancel_job_不存在返回404() {
+    async fn cancel_job_missing_returns_404() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
         let response = app
@@ -666,7 +666,7 @@ profiles:
 
     /// cr-018+#77: dry-run profile 不存在 → 404
     #[tokio::test]
-    async fn dry_run_profile不存在返回404() {
+    async fn dry_run_missing_profile_returns_404() {
         let tmp = tempfile::tempdir().unwrap();
         let app = make_app(tmp.path()).await;
         let body = serde_json::json!({
@@ -691,7 +691,7 @@ profiles:
 
     /// cr-019: dry-run 返回 profile 的 egress allowlist
     #[tokio::test]
-    async fn dry_run返回egress_allowlist() {
+    async fn dry_run_returns_egress_allowlist() {
         use sandbox_core::egress::EgressRule;
         let tmp = tempfile::tempdir().unwrap();
         let config = SandboxConfig {
@@ -737,7 +737,7 @@ profiles:
         let j: serde_json::Value = serde_json::from_slice(&b).unwrap();
         let allowlist = j["egress_allowlist"]
             .as_array()
-            .expect("应有 egress_allowlist");
+            .expect("should have egress_allowlist");
         assert_eq!(allowlist.len(), 1);
         assert_eq!(allowlist[0]["host"], "api.openai.com");
         assert_eq!(allowlist[0]["port"], 443);

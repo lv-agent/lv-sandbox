@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-server"
-description = "轻量级 Agent 沙箱服务"
+description = "Lightweight agent sandbox server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

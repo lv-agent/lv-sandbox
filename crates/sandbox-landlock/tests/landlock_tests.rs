@@ -15,7 +15,7 @@ use sandbox_landlock::{
 // ==================== Round 1: ABI 检测 + FsPolicy ====================
 
 #[test]
-fn abi检测_返回有效的能力结构() {
+fn abi_detection_returns_valid_capability_struct() {
     let caps = detect_capabilities();
 
     // 无论内核是否支持 Landlock，检测都应成功
@@ -24,104 +24,104 @@ fn abi检测_返回有效的能力结构() {
     if caps.supported {
         assert!(
             caps.abi_version >= 1,
-            "Landlock 支持时 ABI 版本应 >= 1，实际 {}",
+            "when Landlock is supported ABI version should be >= 1, actual {}",
             caps.abi_version
         );
         assert!(
             caps.fs_access,
-            "ABI >= 1 时应有 fs_access 能力"
+            "when ABI >= 1 fs_access capability should be present"
         );
     } else {
         assert_eq!(
             caps.abi_version, 0,
-            "不支持时 abi_version 应为 0"
+            "when unsupported abi_version should be 0"
         );
     }
 }
 
 #[test]
-fn fspolicy_shell构建_包含必要规则() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn fspolicy_shell_build_includes_required_rules() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
 
     let rules = policy.rules();
     // 至少包含：workspace 读写 + /bin + /usr/bin + /lib + /dev/null + etc 路径
-    assert!(rules.len() >= 6, "shell 策略应至少 6 条规则，实际 {}", rules.len());
+    assert!(rules.len() >= 6, "shell policy should have at least 6 rules, actual {}", rules.len());
 
     // workspace 应为 ReadWrite
     let ws_rule = rules.iter().find(|r| r.path == tmp.path());
-    assert!(ws_rule.is_some(), "应有 workspace 规则");
+    assert!(ws_rule.is_some(), "should have a workspace rule");
     assert!(matches!(ws_rule.unwrap().access, AccessFs::ReadWrite));
 
     // /bin 应为 ReadExecute
     let bin_rule = rules.iter().find(|r| r.path == Path::new("/bin"));
-    assert!(bin_rule.is_some(), "应有 /bin 规则");
+    assert!(bin_rule.is_some(), "should have a /bin rule");
     assert!(matches!(bin_rule.unwrap().access, AccessFs::ReadExecute));
 }
 
 #[test]
-fn fspolicy_python构建_包含python路径() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn fspolicy_python_build_includes_python_paths() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Python);
 
     let rules = policy.rules();
     let python_rule = rules.iter().find(|r| r.path == Path::new("/usr/lib/python3"));
-    assert!(python_rule.is_some(), "python 策略应包含 /usr/lib/python3");
+    assert!(python_rule.is_some(), "python policy should include /usr/lib/python3");
     assert!(matches!(python_rule.unwrap().access, AccessFs::ReadOnly));
 }
 
 #[test]
-fn fspolicy_node构建_包含node路径() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn fspolicy_node_build_includes_node_paths() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Node);
 
     let rules = policy.rules();
     let node_rule = rules.iter().find(|r| r.path == Path::new("/usr/lib/node_modules"));
-    assert!(node_rule.is_some(), "node 策略应包含 /usr/lib/node_modules");
+    assert!(node_rule.is_some(), "node policy should include /usr/lib/node_modules");
 }
 
 #[test]
-fn fspolicy_custom构建_无额外运行时路径() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn fspolicy_custom_build_has_no_extra_runtime_paths() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Custom);
 
     let rules = policy.rules();
     // Custom 不应有 Python/Node 特定路径，但应有基础系统路径
-    assert!(rules.len() >= 5, "custom 策略应至少 5 条基础规则");
+    assert!(rules.len() >= 5, "custom policy should have at least 5 base rules");
 }
 
 // ==================== Round 2: PreparedRuleset ====================
 
 #[test]
-fn prepared_ruleset_prepare_成功编译() {
+fn prepared_ruleset_prepare_compiles() {
     let caps = detect_capabilities();
 
     if !caps.supported {
-        eprintln!("跳过: 当前内核不支持 Landlock");
+        eprintln!("skipping: current kernel does not support Landlock");
         return;
     }
 
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
 
     let result = PreparedRuleset::prepare(&policy, &caps);
-    assert!(result.is_ok(), "prepare 应成功: {:?}", result.err());
+    assert!(result.is_ok(), "prepare should succeed: {:?}", result.err());
 }
 
 #[test]
-fn prepared_ruleset_apply_在子进程中限制文件系统访问() {
+fn prepared_ruleset_apply_restricts_fs_in_child() {
     let caps = detect_capabilities();
 
     if !caps.supported {
-        eprintln!("跳过: 当前内核不支持 Landlock");
+        eprintln!("skipping: current kernel does not support Landlock");
         return;
     }
 
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
 
     let prepared = PreparedRuleset::prepare(&policy, &caps)
-        .expect("prepare 不应失败");
+        .expect("prepare should not fail");
 
     // 在子进程中 apply landlock，然后尝试写 /tmp 外的文件
     let mut prepared_clone = prepared;
@@ -130,11 +130,11 @@ fn prepared_ruleset_apply_在子进程中限制文件系统访问() {
             .arg("-c")
             .arg("echo LANDLOCK_TEST > /tmp/landlock_test_should_fail.txt 2>&1; echo EXIT=$?")
             .pre_exec(move || {
-                prepared_clone.apply().expect("landlock apply 不应失败");
+                prepared_clone.apply().expect("landlock apply should not fail");
                 Ok(())
             })
             .output()
-            .expect("执行子进程失败")
+            .expect("failed to execute child process")
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -142,22 +142,22 @@ fn prepared_ruleset_apply_在子进程中限制文件系统访问() {
     // 让我们验证 apply 不崩溃，且子进程正常退出
     assert!(
         stdout.contains("EXIT="),
-        "应有 EXIT 输出: {}",
+        "should have EXIT output: {}",
         stdout
     );
 }
 
 #[test]
-fn prepared_ruleset_apply_阻止未授权路径的写入() {
+fn prepared_ruleset_apply_blocks_unauthorized_write() {
     let caps = detect_capabilities();
 
     if !caps.supported {
-        eprintln!("跳过: 当前内核不支持 Landlock");
+        eprintln!("skipping: current kernel does not support Landlock");
         return;
     }
 
     // 创建一个严格策略：只允许 workspace 读写，不添加 /tmp
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let mut policy = FsPolicy::new();
     policy = policy.add_rule(tmp.path(), AccessFs::ReadWrite);
     // 只允许执行 /bin 和 /usr/bin
@@ -168,7 +168,7 @@ fn prepared_ruleset_apply_阻止未授权路径的写入() {
     policy = policy.add_rule("/usr/lib", AccessFs::ReadOnly);
 
     let prepared = PreparedRuleset::prepare(&policy, &caps)
-        .expect("prepare 不应失败");
+        .expect("prepare should not fail");
 
     // 子进程: apply landlock → 尝试在 /var/tmp 写文件（应被阻止）
     let mut prepared_clone = prepared;
@@ -177,11 +177,11 @@ fn prepared_ruleset_apply_阻止未授权路径的写入() {
             .arg("-c")
             .arg("echo TEST > /var/tmp/landlock_blocked.txt 2>/dev/null; echo EXIT=$?")
             .pre_exec(move || {
-                prepared_clone.apply().expect("landlock apply 不应失败");
+                prepared_clone.apply().expect("landlock apply should not fail");
                 Ok(())
             })
             .output()
-            .expect("执行子进程失败")
+            .expect("failed to execute child process")
     };
 
     let _stdout = String::from_utf8_lossy(&output.stdout);
@@ -189,41 +189,41 @@ fn prepared_ruleset_apply_阻止未授权路径的写入() {
     // 验证文件不存在即可
     assert!(
         !std::path::Path::new("/var/tmp/landlock_blocked.txt").exists(),
-        "landlock 应阻止写入 /var/tmp"
+        "landlock should block writing to /var/tmp"
     );
 }
 
 #[test]
-fn fspolicy_shell包含proc全局白名单() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn fspolicy_shell_includes_proc_global_allowlist() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
     let paths: Vec<&Path> = policy.rules().iter().map(|r| r.path.as_path()).collect();
     // cr-017: 不再放行 /proc 整树（避免跨任务 pid 泄露），改为全局白名单；
     // /proc/self 由 PreparedRuleset::apply 动态放行
     assert!(
         !paths.iter().any(|p| *p == Path::new("/proc")),
-        "不应放行 /proc 整树"
+        "should not allow the entire /proc tree"
     );
     assert!(
         paths.iter().any(|p| *p == Path::new("/proc/cpuinfo")),
-        "应含 /proc/cpuinfo 全局白名单"
+        "should include /proc/cpuinfo in the global allowlist"
     );
 }
 
 #[test]
-fn landlock动态放行proc_self() {
+fn landlock_allows_proc_read() {
     let caps = detect_capabilities();
 
     if !caps.supported {
-        eprintln!("跳过: 当前内核不支持 Landlock");
+        eprintln!("skipping: current kernel does not support Landlock");
         return;
     }
 
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
 
     let prepared = PreparedRuleset::prepare(&policy, &caps)
-        .expect("prepare 不应失败");
+        .expect("prepare should not fail");
 
     // cr-017: 直接 exec cat（不经 sh fork），cat pid = pre_exec 动态放行的 pid，
     // 故 cat 能读自己的 /proc/self/status。
@@ -234,22 +234,22 @@ fn landlock动态放行proc_self() {
         Command::new("/bin/cat")
             .arg("/proc/self/status")
             .pre_exec(move || {
-                prepared_clone.apply().expect("landlock apply 失败");
+                prepared_clone.apply().expect("landlock apply failed");
                 Ok(())
             })
             .output()
-            .expect("执行子进程失败")
+            .expect("failed to execute child process")
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Name:"),
-        "cr-017: 直接 exec 进程应能读 /proc/self/status（动态放行），实际: {stdout}"
+        "cr-017: directly exec'd process should read /proc/self/status (dynamic grant), actual: {stdout}"
     );
 }
 
 #[test]
-fn prepared_ruleset_prepare_不支持时返回错误() {
+fn prepared_ruleset_prepare_returns_error_when_unsupported() {
     let caps = LandlockCapabilities {
         supported: false,
         abi_version: 0,
@@ -259,42 +259,42 @@ fn prepared_ruleset_prepare_不支持时返回错误() {
         signal_control: false,
     };
 
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
 
     let result = PreparedRuleset::prepare(&policy, &caps);
-    assert!(result.is_err(), "不支持时应返回错误");
+    assert!(result.is_err(), "should return error when unsupported");
     assert!(
         matches!(result.unwrap_err(), LandlockError::Unavailable(_)),
-        "错误类型应为 Unavailable"
+        "error type should be Unavailable"
     );
 }
 
 // ==================== cr-017: proc 信息边界收紧 ====================
 
 #[test]
-fn proc策略_不含_proc根_含全局白名单() {
-    let tmp = tempfile::tempdir().expect("创建临时目录失败");
+fn proc_policy_excludes_proc_root_includes_global_allowlist() {
+    let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let policy = FsPolicy::for_job(tmp.path(), RuntimeKind::Shell);
     let paths: Vec<&Path> = policy.rules().iter().map(|r| r.path.as_path()).collect();
 
     // 不应放行 /proc 整树（PathBeneath 会放行全部子项 → 跨任务 pid 泄露）
     assert!(
         !paths.iter().any(|p| *p == Path::new("/proc")),
-        "不应放行 /proc 整树，实际 paths: {:?}",
+        "should not allow the entire /proc tree, actual paths: {:?}",
         paths
     );
     // 应含全局无害白名单项
     assert!(
         paths.iter().any(|p| *p == Path::new("/proc/cpuinfo")),
-        "应放行 /proc/cpuinfo"
+        "should allow /proc/cpuinfo"
     );
     assert!(
         paths.iter().any(|p| *p == Path::new("/proc/meminfo")),
-        "应放行 /proc/meminfo"
+        "should allow /proc/meminfo"
     );
     assert!(
         paths.iter().any(|p| *p == Path::new("/proc/stat")),
-        "应放行 /proc/stat"
+        "should allow /proc/stat"
     );
 }

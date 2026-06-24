@@ -15,7 +15,7 @@ use crate::worker::WorkerStatus;
 /// 调度错误
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
-    #[error("运行器错误: {0}")]
+    #[error("runner error: {0}")]
     Runner(#[from] sandbox_core::CoreError),
 }
 
@@ -36,9 +36,9 @@ pub struct JobEntry {
 /// cr-018: cancel 错误
 #[derive(Debug, thiserror::Error)]
 pub enum CancelError {
-    #[error("任务不存在")]
+    #[error("job not found")]
     NotFound,
-    #[error("任务已完成，无法取消")]
+    #[error("job already finished, cannot cancel")]
     AlreadyDone,
 }
 
@@ -84,7 +84,7 @@ impl Scheduler {
         self: Arc<Self>,
         request: JobRequest,
     ) -> Result<JobResult, SchedulerError> {
-        let _permit = self.semaphore.acquire().await.expect("semaphore 未关闭");
+        let _permit = self.semaphore.acquire().await.expect("semaphore closed");
 
         // Metrics: job 启动 + 运行中
         crate::metrics::JOB_STARTED_TOTAL.inc();
@@ -93,7 +93,7 @@ impl Scheduler {
         let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
 
         // 克隆 runner 快照，释放读锁后执行（不阻塞 reload）
-        let runner = { self.runner.read().expect("runner 锁中毒").clone() };
+        let runner = { self.runner.read().expect("runner lock poisoned").clone() };
         let result = runner.run_job(request).await;
 
         // Metrics: fork→exec 耗时只计执行阶段
@@ -117,7 +117,7 @@ impl Scheduler {
     /// 持写锁替换内层 `Arc<SandboxRunner>`。正在执行的 job
     /// 使用的是已 clone 的快照，不受影响。
     pub fn reload(&self, new_runner: Arc<SandboxRunner>) {
-        let mut guard = self.runner.write().expect("runner 锁中毒");
+        let mut guard = self.runner.write().expect("runner lock poisoned");
         *guard = new_runner;
     }
 
@@ -125,7 +125,7 @@ impl Scheduler {
     pub async fn submit_async(&self, request: JobRequest) -> String {
         let job_id = request.job_id.clone();
         let cancel = CancellationToken::new();
-        self.jobs.write().expect("jobs 锁中毒").insert(
+        self.jobs.write().expect("jobs lock poisoned").insert(
             job_id.clone(),
             JobEntry {
                 cancel: cancel.clone(),
@@ -136,7 +136,7 @@ impl Scheduler {
 
         // cr-018: 后台执行（runner 快照 + 共享 jobs 表 + semaphore）
         let runner = {
-            self.runner.read().expect("runner 锁中毒").clone()
+            self.runner.read().expect("runner lock poisoned").clone()
         };
         let semaphore = self.semaphore.clone();
         let jobs = self.jobs.clone();
@@ -144,7 +144,7 @@ impl Scheduler {
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
             crate::metrics::RUNNING_JOBS.inc();
-            let _permit = semaphore.acquire().await.expect("semaphore 未关闭");
+            let _permit = semaphore.acquire().await.expect("semaphore closed");
             let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
 
             let result = runner.run_job_with_cancel(request, cancel).await;
@@ -170,7 +170,7 @@ impl Scheduler {
                 sandbox_violations: vec![],
                 resource_usage: None,
             });
-            if let Some(entry) = jobs.write().expect("jobs 锁中毒").get_mut(&jid) {
+            if let Some(entry) = jobs.write().expect("jobs lock poisoned").get_mut(&jid) {
                 entry.state = JobState::Done(result);
             }
         });
@@ -182,14 +182,14 @@ impl Scheduler {
     pub fn get_job(&self, job_id: &str) -> Option<JobState> {
         self.jobs
             .read()
-            .expect("jobs 锁中毒")
+            .expect("jobs lock poisoned")
             .get(job_id)
             .map(|e| e.state.clone())
     }
 
     /// cr-018: 取消 job
     pub fn cancel_job(&self, job_id: &str) -> Result<(), CancelError> {
-        let jobs = self.jobs.read().expect("jobs 锁中毒");
+        let jobs = self.jobs.read().expect("jobs lock poisoned");
         match jobs.get(job_id) {
             Some(e) if matches!(e.state, JobState::Running) => {
                 e.cancel.cancel();
@@ -212,19 +212,19 @@ impl Scheduler {
 
     /// 所有已注册的 profile 名
     pub fn profile_names(&self) -> Vec<String> {
-        let runner = self.runner.read().expect("runner 锁中毒");
+        let runner = self.runner.read().expect("runner lock poisoned");
         runner.profile_registry().names()
     }
 
     /// cr-018+#77: 查询某个 profile（dry-run 用，返回克隆）
     pub fn get_profile(&self, name: &str) -> Option<sandbox_core::profile::SandboxProfile> {
-        let runner = self.runner.read().expect("runner 锁中毒");
+        let runner = self.runner.read().expect("runner lock poisoned");
         runner.profile_registry().get(name).cloned()
     }
 
     /// Worker 状态
     pub fn worker_status(&self) -> WorkerStatus {
-        let runner = self.runner.read().expect("runner 锁中毒");
+        let runner = self.runner.read().expect("runner lock poisoned");
         let disk_ok = runner
             .workspace_mgr()
             .check_disk_watermark()
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profile_names_返回内置profile() {
+    async fn profile_names_returns_builtins() {
         let tmp = tempfile::tempdir().unwrap();
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10);
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_替换runner后能查到新profile() {
+    async fn reload_swaps_runner_new_profile_visible() {
         let tmp = tempfile::tempdir().unwrap();
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10);
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_async_注册任务_完成后get_job返回done() {
+    async fn submit_async_done_after_complete() {
         let tmp = tempfile::tempdir().unwrap();
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10);
@@ -329,13 +329,13 @@ mod tests {
         let state = wait_until_done(&scheduler, &jid).await;
         assert!(
             matches!(state, Some(JobState::Done(_))),
-            "任务应完成 → Done，实际: {:?}",
+            "job should finish -> Done, actual: {:?}",
             state
         );
     }
 
     #[tokio::test]
-    async fn cancel_job_停止运行中任务为cancelled() {
+    async fn cancel_job_stops_running_as_cancelled() {
         let tmp = tempfile::tempdir().unwrap();
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10);
@@ -344,7 +344,7 @@ mod tests {
             .submit_async(make_async_request("cancel-001", &["/bin/sleep", "30"]))
             .await;
         tokio::time::sleep(Duration::from_millis(200)).await;
-        scheduler.cancel_job(&jid).expect("cancel 应成功");
+        scheduler.cancel_job(&jid).expect("cancel should succeed");
 
         let state = wait_until_done(&scheduler, &jid).await;
         assert!(
@@ -352,13 +352,13 @@ mod tests {
                 state,
                 Some(JobState::Done(ref r)) if matches!(r.status, sandbox_core::job::JobStatus::Cancelled)
             ),
-            "cancel 后应 Done(Cancelled)，实际: {:?}",
+            "after cancel should be Done(Cancelled), actual: {:?}",
             state
         );
     }
 
     #[tokio::test]
-    async fn cancel_job_已完成返回alreadydone() {
+    async fn cancel_job_done_returns_already_done() {
         let tmp = tempfile::tempdir().unwrap();
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10);
@@ -378,7 +378,7 @@ mod tests {
     /// cleanup/proxy.stop 挂起,wait_until_done 会超时返回 Running → 断言失败)。
     /// 注:gap1 的 JobProxy Drop 是泄漏兜底;本测试锁定 cancel+proxy 集成路径。
     #[tokio::test]
-    async fn cancel_job_带allowlist的job正常停止() {
+    async fn cancel_job_with_allowlist_stops_cleanly() {
         let tmp = tempfile::tempdir().unwrap();
         let mut runner = make_runner(tmp.path()).await;
         runner.register_profile(SandboxProfile {
@@ -402,7 +402,7 @@ mod tests {
         let jid = scheduler.submit_async(req).await;
         // 让代理起好 + 子进程跑起来
         tokio::time::sleep(Duration::from_millis(300)).await;
-        scheduler.cancel_job(&jid).expect("cancel 应成功");
+        scheduler.cancel_job(&jid).expect("cancel should succeed");
 
         let state = wait_until_done(&scheduler, &jid).await;
         assert!(
@@ -410,7 +410,7 @@ mod tests {
                 state,
                 Some(JobState::Done(ref r)) if matches!(r.status, sandbox_core::job::JobStatus::Cancelled)
             ),
-            "cancel 后应 Done(Cancelled),实际: {:?}",
+            "after cancel should be Done(Cancelled), actual: {:?}",
             state
         );
     }

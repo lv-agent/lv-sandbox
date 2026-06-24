@@ -36,11 +36,11 @@ pub fn recover(runner: &SandboxRunner) -> Result<RecoveryReport, CoreError> {
     for job_id in &jobs {
         match mgr.cleanup_job(job_id) {
             Ok(()) => {
-                tracing::info!(job_id = %job_id, "恢复清理: 残留 workspace 已删除");
+                tracing::info!(job_id = %job_id, "recovery cleanup: stale workspace removed");
                 report.cleaned += 1;
             }
             Err(e) => {
-                tracing::warn!(job_id = %job_id, error = %e, "恢复清理失败");
+                tracing::warn!(job_id = %job_id, error = %e, "recovery cleanup failed");
                 report.errors += 1;
             }
         }
@@ -51,7 +51,7 @@ pub fn recover(runner: &SandboxRunner) -> Result<RecoveryReport, CoreError> {
             scanned = report.scanned,
             cleaned = report.cleaned,
             errors = report.errors,
-            "崩溃恢复完成"
+            "crash recovery complete"
         );
     }
 

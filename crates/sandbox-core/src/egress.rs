@@ -69,13 +69,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 空白名单拒绝一切() {
+    fn empty_allowlist_denies_all() {
         let m = AllowlistMatcher::new(vec![]);
         assert!(!m.is_allowed("any.host", 443));
     }
 
     #[test]
-    fn 精确host命中() {
+    fn exact_host_matches() {
         let m = AllowlistMatcher::new(vec![EgressRule {
             host: "api.openai.com".into(),
             port: None,
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn 端口限定() {
+    fn port_restricted() {
         let m = AllowlistMatcher::new(vec![EgressRule {
             host: "api.openai.com".into(),
             port: Some(443),
@@ -96,7 +96,7 @@ mod tests {
     }
 
     #[test]
-    fn 通配匹配最左单label() {
+    fn wildcard_matches_single_leftmost_label() {
         let m = AllowlistMatcher::new(vec![EgressRule {
             host: "*.pypi.org".into(),
             port: None,
@@ -107,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn 大小写不敏感() {
+    fn case_insensitive() {
         let m = AllowlistMatcher::new(vec![EgressRule {
             host: "API.OpenAI.com".into(),
             port: None,

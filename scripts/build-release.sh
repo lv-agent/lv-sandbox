@@ -28,10 +28,10 @@ ARCH="$(uname -m)"
 DIST="dist"
 TARBALL="${DIST}/${IMAGE}-${VERSION}-${ARCH}-gnu.tar.gz"
 
-echo "==> 构建镜像 ${IMAGE}:${VERSION} / ${IMAGE}:latest"
+echo "==> building image ${IMAGE}:${VERSION} / ${IMAGE}:latest"
 DOCKER_BUILDKIT=1 docker build -t "${IMAGE}:${VERSION}" -t "${IMAGE}:latest" .
 
-echo "==> 从镜像导出二进制"
+echo "==> extracting binaries from image"
 rm -rf "${DIST}"
 mkdir -p "${DIST}"
 docker rm -f extract >/dev/null 2>&1 || true
@@ -45,23 +45,23 @@ cp docker/config.yaml "${DIST}/config.yaml.example"
 cat > "${DIST}/README-quickstart.txt" <<EOF
 lv-sandbox ${VERSION} (${ARCH}, glibc)
 
-运行时依赖: libseccomp2
+Runtime dependency: libseccomp2
   Debian/Ubuntu: sudo apt install libseccomp2
   RHEL/Fedora:   sudo dnf install libseccomp
 
-启动:
+Start:
   ./sandbox-server --config config.yaml.example
 
-另需宿主 Linux 内核 >= 5.13 (Landlock)。
-完整用法见 docs/usage.md。
+Requires host Linux kernel >= 5.13 (Landlock).
+Full usage: see docs/usage.md.
 EOF
 
-echo "==> 打包 ${TARBALL}"
+echo "==> packing ${TARBALL}"
 tar -czf "${TARBALL}" -C "${DIST}" \
     sandbox-server sandbox-mcp config.yaml.example README-quickstart.txt
 
 echo ""
-echo "✅ 完成"
-echo "   镜像: ${IMAGE}:${VERSION}, ${IMAGE}:latest"
-echo "   归档: ${TARBALL}"
+echo "✅ done"
+echo "   image: ${IMAGE}:${VERSION}, ${IMAGE}:latest"
+echo "   archive: ${TARBALL}"
 ls -lh "${TARBALL}"

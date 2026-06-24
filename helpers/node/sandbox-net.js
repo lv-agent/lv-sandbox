@@ -61,7 +61,7 @@ function request(method, urlStr, body, headers, cb) {
   const port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
   const path = (u.pathname || "/") + u.search;
   const proxy = process.env.SANDBOX_PROXY_SOCK;
-  if (!proxy) return cb(new Error("SANDBOX_PROXY_SOCK 未设置"));
+  if (!proxy) return cb(new Error("SANDBOX_PROXY_SOCK not set"));
 
   const lines = [`${method} ${path} HTTP/1.1`, `Host: ${host}`, "Connection: close"];
   if (headers) for (const k in headers) lines.push(`${k}: ${headers[k]}`);

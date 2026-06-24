@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
 
     let base_url = std::env::var("SANDBOX_SERVER_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-    tracing::info!(base_url = %base_url, "sandbox-mcp 网关启动，连接 sandbox-server");
+    tracing::info!(base_url = %base_url, "sandbox-mcp gateway starting, connecting to sandbox-server");
 
     let http = SandboxHttpClient::new(&base_url)?;
     let server = SandboxMcpServer::new(http);

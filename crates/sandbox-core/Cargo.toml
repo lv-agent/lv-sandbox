@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-core"
-description = "轻量级沙箱核心：进程编排、环境/FD 清理、rlimit、workspace 管理、job 状态机"
+description = "Lightweight sandbox core: process orchestration, env/FD cleanup, rlimit, workspace management, job state machine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

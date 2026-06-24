@@ -8,7 +8,7 @@ use sandbox_core::workspace::WorkspaceManager;
 
 /// 空目录恢复应返回 0 清理
 #[tokio::test]
-async fn 空目录恢复返回零清理() {
+async fn empty_dir_recovery_returns_zero_cleanup() {
     let tmp = tempfile::tempdir().unwrap();
     let config = SandboxConfig {
         sandbox_base_dir: tmp.path().to_path_buf(),
@@ -23,14 +23,14 @@ async fn 空目录恢复返回零清理() {
 
 /// 残留 workspace 被清理
 #[tokio::test]
-async fn 残留workspace被清理() {
+async fn stale_workspace_is_cleaned() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path();
 
     // 模拟残留 workspace 目录
     let job_dir = base.join("recovery-test-001");
     std::fs::create_dir_all(&job_dir).unwrap();
-    std::fs::write(job_dir.join("data.txt"), "残留数据").unwrap();
+    std::fs::write(job_dir.join("data.txt"), "stale data").unwrap();
 
     assert!(job_dir.exists());
 
@@ -50,7 +50,7 @@ async fn 残留workspace被清理() {
 
 /// 正常运行的 job 不被误清理
 #[tokio::test]
-async fn 正常metadata的job不被误清理() {
+async fn finished_job_with_metadata_still_cleaned() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path();
 
@@ -87,7 +87,7 @@ async fn 正常metadata的job不被误清理() {
 
 /// RecoveryReport 可序列化
 #[test]
-fn recovery_report可序列化() {
+fn recovery_report_is_serializable() {
     let report = RecoveryReport {
         scanned: 5,
         cleaned: 3,
