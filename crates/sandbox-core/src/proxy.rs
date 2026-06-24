@@ -141,7 +141,7 @@ async fn reply(stream: &mut UnixStream, code: u8) -> std::io::Result<()> {
 
 /// per-job 代理句柄:启动时 bind UDS,停止时 cancel + 清理 socket 文件。
 pub struct JobProxy {
-    task: tokio::task::JoinHandle<()>,
+    task: Option<tokio::task::JoinHandle<()>>,
     cancel: CancellationToken,
     sock_path: std::path::PathBuf,
 }
@@ -162,7 +162,7 @@ impl JobProxy {
         });
         Ok((
             Self {
-                task,
+                task: Some(task),
                 cancel,
                 sock_path: sock_path.clone(),
             },
@@ -171,9 +171,21 @@ impl JobProxy {
     }
 
     /// 停止代理:cancel → 等 task(最多 500ms)→ 删 socket 文件。
-    pub async fn stop(self) {
+    pub async fn stop(mut self) {
         self.cancel.cancel();
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), self.task).await;
+        if let Some(task) = self.task.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), task).await;
+        }
+        let _ = std::fs::remove_file(&self.sock_path);
+    }
+}
+
+impl Drop for JobProxy {
+    fn drop(&mut self) {
+        // 安全网:覆盖 spawn 失败 / pre_exec 失败等早返回路径(此时未显式 stop)。
+        // cancel 使 accept 循环退出,remove_file 清理 socket 目录项。
+        // stop() 消耗 self 后 Drop 仍会运行一次,但 cancel()/remove_file 均幂等,无副作用。
+        self.cancel.cancel();
         let _ = std::fs::remove_file(&self.sock_path);
     }
 }
@@ -269,5 +281,22 @@ mod tests {
 
         cancel.cancel();
         let _ = task.await;
+    }
+
+    /// cr-019 gap1: JobProxy 不显式 stop 而 drop(模拟 pre_exec/spawn 失败早返回)时,
+    /// Drop 应 cancel 代理 + 清理 socket 文件(否则 task + listener fd 泄漏)。
+    #[tokio::test]
+    async fn jobproxy_drop时停止代理并清理socket() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        let matcher = AllowlistMatcher::new(vec![]);
+        let (proxy, sock_path) = JobProxy::start(&ws, matcher).await.unwrap();
+        assert!(sock_path.exists(), "启动后 socket 文件应存在");
+
+        drop(proxy); // 不调 stop,直接 drop(模拟早返回路径)
+
+        // Drop 同步执行 cancel + remove_file,socket 目录项应立即消失
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!sock_path.exists(), "drop 后 socket 文件应被 Drop 清理");
     }
 }
