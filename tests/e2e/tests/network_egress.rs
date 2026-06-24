@@ -303,3 +303,86 @@ cs.close()
         stderr
     );
 }
+
+/// cr-019 HTTPS(node): node helper 经代理走 TLS 拿 200。
+/// 与 python HTTPS 同一份自签证书 + Python TLS server,换 node helper +
+/// NODE_EXTRA_CA_CERTS 信任自签。验证 node helper 的 tls.connect 分支。
+#[tokio::test]
+async fn node_helper经代理走https() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command;
+
+    if Command::new("openssl").arg("version").output().await.is_err()
+        || Command::new("node").arg("--version").output().await.is_err()
+    {
+        eprintln!("跳过:环境无 openssl/node");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cert = tmp.path().join("cert.pem");
+    let key = tmp.path().join("key.pem");
+    let gen = Command::new("openssl")
+        .args([
+            "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", key.to_str().unwrap(),
+            "-out", cert.to_str().unwrap(),
+            "-days", "1", "-nodes", "-subj", "/CN=localhost",
+        ])
+        .output().await.unwrap();
+    assert!(gen.status.success(), "openssl 生成证书失败: {}", String::from_utf8_lossy(&gen.stderr));
+
+    let py_server = r#"
+import ssl, socket, sys
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(sys.argv[1], sys.argv[2])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(1)
+print(s.getsockname()[1], flush=True)
+cs, _ = s.accept()
+cs = ctx.wrap_socket(cs, server_side=True)
+cs.recv(4096)
+cs.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+cs.close()
+"#;
+    let mut server = Command::new("python3")
+        .arg("-c").arg(py_server)
+        .arg(cert.to_str().unwrap()).arg(key.to_str().unwrap())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true).spawn().unwrap();
+    let mut reader = BufReader::new(server.stdout.take().unwrap());
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).await.expect("读取端口失败");
+    let port: u16 = port_line.trim().parse().expect("端口解析失败");
+
+    let proxy_tmp = tempfile::tempdir().unwrap();
+    let matcher = sandbox_core::egress::AllowlistMatcher::new(vec![
+        sandbox_core::egress::EgressRule { host: "localhost".into(), port: Some(port) },
+    ]);
+    let (proxy, sock_path) =
+        sandbox_core::proxy::JobProxy::start(proxy_tmp.path(), matcher).await.unwrap();
+
+    let helper = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../helpers/node/sandbox-net.js");
+    let script = format!(
+        "const {{request}}=require('{h}'); request('GET','https://localhost:{p}/',null,null,(e,r)=>{{if(e){{console.error(e.message);process.exit(1)}}console.log(r.status)}})",
+        h = helper.display(), p = port,
+    );
+    let output = Command::new("node")
+        .arg("-e").arg(&script)
+        .env("SANDBOX_PROXY_SOCK", sock_path.to_str().unwrap())
+        .env("NODE_EXTRA_CA_CERTS", cert.to_str().unwrap())
+        .output().await.expect("执行 node 失败");
+
+    proxy.stop().await;
+    let _ = server.kill().await;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("200"),
+        "node helper 经 https 应拿 200,stdout={:?} stderr={:?}",
+        stdout, stderr
+    );
+}
