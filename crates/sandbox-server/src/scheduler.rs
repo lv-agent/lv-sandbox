@@ -372,4 +372,46 @@ mod tests {
             Err(CancelError::AlreadyDone)
         ));
     }
+
+    /// cr-019 gap2(回归覆盖): 带 egress allowlist 的 job 被 cancel 时,
+    /// 代理随 cleanup 正确停止——job 应在轮询窗口内到达 Cancelled(若
+    /// cleanup/proxy.stop 挂起,wait_until_done 会超时返回 Running → 断言失败)。
+    /// 注:gap1 的 JobProxy Drop 是泄漏兜底;本测试锁定 cancel+proxy 集成路径。
+    #[tokio::test]
+    async fn cancel_job_带allowlist的job正常停止() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut runner = make_runner(tmp.path()).await;
+        runner.register_profile(SandboxProfile {
+            name: "egress_shell".to_string(),
+            egress_allowlist: vec![sandbox_core::egress::EgressRule {
+                host: "localhost".to_string(),
+                port: None,
+            }],
+            ..SandboxProfile::shell()
+        });
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let req = JobRequest {
+            job_id: "cancel-egress-001".to_string(),
+            argv: vec!["/bin/sleep".to_string(), "30".to_string()],
+            profile_name: "egress_shell".to_string(),
+            timeout: Some(Duration::from_secs(30)),
+            custom_env: HashMap::new(),
+            stdin_data: None,
+        };
+        let jid = scheduler.submit_async(req).await;
+        // 让代理起好 + 子进程跑起来
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        scheduler.cancel_job(&jid).expect("cancel 应成功");
+
+        let state = wait_until_done(&scheduler, &jid).await;
+        assert!(
+            matches!(
+                state,
+                Some(JobState::Done(ref r)) if matches!(r.status, sandbox_core::job::JobStatus::Cancelled)
+            ),
+            "cancel 后应 Done(Cancelled),实际: {:?}",
+            state
+        );
+    }
 }
