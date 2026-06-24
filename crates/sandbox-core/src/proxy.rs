@@ -299,4 +299,108 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!sock_path.exists(), "drop 后 socket 文件应被 Drop 清理");
     }
+
+    /// 发 SOCKS5 请求(cmd + atyp + host + port),返回 reply 的 REP 码(第二字节)。
+    async fn socks5_request_rep(
+        proxy_path: &str,
+        cmd: u8,
+        atyp: u8,
+        host: &str,
+        port: u16,
+    ) -> std::io::Result<u8> {
+        let mut s = UnixStream::connect(proxy_path).await?;
+        s.write_all(&[0x05, 0x01, 0x00]).await?; // 问候
+        let mut gr = [0u8; 2];
+        s.read_exact(&mut gr).await?;
+        let mut req = vec![0x05, cmd, 0x00, atyp];
+        match atyp {
+            0x03 => {
+                let hb = host.as_bytes();
+                req.push(hb.len() as u8);
+                req.extend_from_slice(hb);
+            }
+            0x01 => req.extend_from_slice(&[127, 0, 0, 1]), // 占位 IPv4
+            _ => {}
+        }
+        req.extend_from_slice(&port.to_be_bytes());
+        s.write_all(&req).await?;
+        let mut rep = [0u8; 10];
+        s.read_exact(&mut rep).await?;
+        Ok(rep[1])
+    }
+
+    /// cr-019 gap3:IPv4 字面量 ATYP 应被拒绝(强制 DOMAIN/远程 DNS)→ reply 0x02
+    #[tokio::test]
+    async fn 代理拒绝ipv4字面量() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![EgressRule {
+            host: "localhost".into(),
+            port: None,
+        }]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        let rep = socks5_request_rep(proxy_path.to_str().unwrap(), 0x01, 0x01, "127.0.0.1", 80)
+            .await
+            .unwrap();
+        assert_eq!(rep, 0x02, "IPv4 字面量 ATYP 应被拒绝");
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 gap3:非 CONNECT 命令(如 BIND)应回 command not supported → reply 0x07
+    #[tokio::test]
+    async fn 代理拒绝非connect命令() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![EgressRule {
+            host: "localhost".into(),
+            port: None,
+        }]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        let rep = socks5_request_rep(proxy_path.to_str().unwrap(), 0x02, 0x03, "localhost", 80)
+            .await
+            .unwrap();
+        assert_eq!(rep, 0x07, "非 CONNECT 应回 command not supported");
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 gap3:白名单内但上游无监听 → connection refused → reply 0x05
+    #[tokio::test]
+    async fn 代理上游连接失败回refused() {
+        // 取一个端口后立即 drop,保证它无人监听(loopback 上连空闲端口 → ECONNREFUSED)
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = closed.local_addr().unwrap().port();
+        drop(closed);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![EgressRule {
+            host: "localhost".into(),
+            port: Some(closed_port),
+        }]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        let rep =
+            socks5_request_rep(proxy_path.to_str().unwrap(), 0x01, 0x03, "localhost", closed_port)
+                .await
+                .unwrap();
+        assert_eq!(rep, 0x05, "上游连接失败应回 connection refused");
+
+        cancel.cancel();
+        let _ = task.await;
+    }
 }
