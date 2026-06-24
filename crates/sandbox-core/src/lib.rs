@@ -13,6 +13,7 @@ pub mod fd;
 pub mod job;
 pub mod process;
 pub mod profile;
+pub mod proxy;
 pub mod recovery;
 pub mod rlimit;
 pub mod sandbox_context;
