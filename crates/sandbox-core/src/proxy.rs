@@ -403,4 +403,136 @@ mod tests {
         cancel.cancel();
         let _ = task.await;
     }
+
+    /// 原始客户端:连 UDS,发送任意字节,关闭写端,读回对端响应(2s 超时兜底防挂)。
+    async fn raw_send_recv(proxy_path: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut s = UnixStream::connect(proxy_path).await.unwrap();
+        let _ = s.write_all(bytes).await;
+        let _ = s.shutdown().await; // 关闭写端,促使对端处理完关闭
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            s.read_to_end(&mut buf),
+        )
+        .await;
+        buf
+    }
+
+    /// cr-019 malformed: 问候 VER 非 5 → 代理静默关闭(不回复),不挂。
+    #[tokio::test]
+    async fn 畸形_bad_ver问候被静默关闭() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x04, 0x01, 0x00]).await;
+        assert!(buf.is_empty(), "bad VER 应静默关闭,无回复,实际: {:?}", buf);
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 malformed: 截断问候(只发 1 字节)→ 代理 read_exact 失败,不挂。
+    #[tokio::test]
+    async fn 畸形_截断问候不挂() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x05]).await;
+        assert!(buf.is_empty(), "截断问候应被 EOF 处理,无回复");
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 malformed: 未知 ATYP → 回 general failure(reply 0x01)。
+    #[tokio::test]
+    async fn 畸形_未知atyp回general_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![EgressRule {
+            host: "localhost".into(),
+            port: None,
+        }]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        // 问候[5,1,0] + 请求[5,1,0,9](ATYP=0x09 未知)
+        let buf = raw_send_recv(
+            proxy_path.to_str().unwrap(),
+            &[0x05, 0x01, 0x00, 0x05, 0x01, 0x00, 0x09],
+        )
+        .await;
+        // buf = 问候回复[5,0] + 错误回复[5,REP,...],REP 在 buf[3]
+        assert!(
+            buf.len() >= 4 && buf[3] == 0x01,
+            "未知 ATYP 应回 REP=0x01,实际: {:?}",
+            buf
+        );
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 malformed: DOMAIN 声明长度但字节不足 → read_exact EOF,不挂。
+    #[tokio::test]
+    async fn 畸形_截断domain不挂() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![EgressRule {
+            host: "localhost".into(),
+            port: None,
+        }]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        // 问候[5,1,0] + 请求[5,1,0,3](DOMAIN) + len=5,但只给 2 字节 host
+        let buf = raw_send_recv(
+            proxy_path.to_str().unwrap(),
+            &[0x05, 0x01, 0x00, 0x05, 0x01, 0x00, 0x03, 0x05, b'a', b'b'],
+        )
+        .await;
+        // 代理先回问候[5,0],再读 host 时 EOF → 不写连接回复
+        assert_eq!(
+            buf,
+            vec![0x05, 0x00],
+            "截断 DOMAIN 应只有问候回复,无连接回复,实际: {:?}",
+            buf
+        );
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    /// cr-019 malformed: 超大 NMETHODS(255)但字节不足 → read_exact EOF,不挂、不 OOM。
+    #[tokio::test]
+    async fn 畸形_超大nmethods不挂() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy_path = tmp.path().join(".proxy.sock");
+        let matcher = AllowlistMatcher::new(vec![]);
+        let listener = tokio::net::UnixListener::bind(&proxy_path).unwrap();
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        let task = tokio::spawn(async move { run_job_proxy(listener, matcher, c2).await });
+
+        // 问候 VER=5, NMETHODS=255, 但不给 methods 字节
+        let buf = raw_send_recv(proxy_path.to_str().unwrap(), &[0x05, 0xff]).await;
+        assert!(buf.is_empty(), "超大 NMETHODS 截断应被 EOF 处理,无回复");
+
+        cancel.cancel();
+        let _ = task.await;
+    }
 }
