@@ -131,6 +131,16 @@ struct DryRunSummary {
     max_stdout_mb: u64,
     landlock: String,
     fail_closed: bool,
+    /// cr-019: 出站白名单（空 = 零出站）
+    egress_allowlist: Vec<EgressRuleView>,
+}
+
+/// cr-019: dry-run / 响应中的单条出站规则视图
+#[derive(Debug, Serialize)]
+struct EgressRuleView {
+    host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,6 +190,14 @@ async fn create_job(
                     max_stdout_mb: profile.max_stdout_bytes / 1024 / 1024,
                     landlock: format!("{:?}", profile.landlock_template),
                     fail_closed: profile.fail_closed,
+                    egress_allowlist: profile
+                        .egress_allowlist
+                        .iter()
+                        .map(|r| EgressRuleView {
+                            host: r.host.clone(),
+                            port: r.port,
+                        })
+                        .collect(),
                 }),
             )
                 .into_response(),
@@ -669,5 +687,59 @@ profiles:
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// cr-019: dry-run 返回 profile 的 egress allowlist
+    #[tokio::test]
+    async fn dry_run返回egress_allowlist() {
+        use sandbox_core::egress::EgressRule;
+        let tmp = tempfile::tempdir().unwrap();
+        let config = SandboxConfig {
+            sandbox_base_dir: tmp.path().to_path_buf(),
+            disk_watermark_bytes: 0,
+        };
+        let mut runner = SandboxRunner::new(&config).await.unwrap();
+        runner.register_profile(sandbox_core::profile::SandboxProfile {
+            name: "net_profile".into(),
+            egress_allowlist: vec![EgressRule {
+                host: "api.openai.com".into(),
+                port: Some(443),
+            }],
+            ..sandbox_core::profile::SandboxProfile::python()
+        });
+        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let app = app(AppState {
+            scheduler,
+            config_path: std::path::PathBuf::new(),
+        });
+
+        let body = serde_json::json!({
+            "job_id": "d",
+            "argv": ["/bin/echo", "x"],
+            "profile_name": "net_profile",
+            "dry_run": true,
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        let allowlist = j["egress_allowlist"]
+            .as_array()
+            .expect("应有 egress_allowlist");
+        assert_eq!(allowlist.len(), 1);
+        assert_eq!(allowlist[0]["host"], "api.openai.com");
+        assert_eq!(allowlist[0]["port"], 443);
     }
 }

@@ -155,6 +155,31 @@ patterns (Bearer tokens, AWS `AKIA` keys, GitHub tokens, PEM private keys) are
 replaced with `[REDACTED]` before returning, so credentials a task accidentally
 reads (e.g. `~/.aws/credentials`) don't leak into the agent's context.
 
+### Controlled egress (egress allowlist)
+
+By default tasks have zero egress. Set `egress_allowlist` on a profile to allow
+specific hosts (port optional):
+
+```yaml
+profiles:
+  python:
+    egress_allowlist:
+      - host: "pypi.org"
+      - host: "*.pypi.org"
+      - host: "files.pythonhosted.org"
+        port: 443
+```
+
+- A task can only egress via `SANDBOX_PROXY_SOCK` (a SOCKS5h proxy over a UDS in
+  the workspace) — seccomp blocks creating any TCP/UDP socket at the `socket()`
+  call itself.
+- Task code uses the bundled helper (e.g. `helpers/python/sandbox_net.py`), which
+  routes through the proxy automatically:
+  `import sandbox_net; r = sandbox_net.get("https://api.openai.com/...")`.
+- `*` matches a single leftmost label (`*.pypi.org` matches `download.pypi.org`,
+  not `a.b.pypi.org`).
+- `dry_run: true` returns the profile's `egress_allowlist` for previewing.
+
 ### Profiles
 
 Three built-in profiles, chosen per task at submit time:
