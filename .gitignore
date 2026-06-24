@@ -14,3 +14,7 @@ veps/
 
 # 构建分发产物（scripts/build-release.sh 输出，不纳入版本控制）
 /dist/
+
+# Python 字节码（跑 helpers/ 测试时生成）
+__pycache__/
+*.pyc
