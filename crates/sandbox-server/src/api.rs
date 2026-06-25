@@ -11,13 +11,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::{Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
+
+use sandbox_core::job::StreamEvent;
 
 use crate::scheduler::Scheduler;
 
@@ -226,11 +231,18 @@ struct ErrorResponse {
     error: String,
 }
 
-/// cr-018: POST /jobs — 异步提交，立即返回 job_id
+/// cr-024: POST /jobs?stream=true 的 query flag。
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    stream: Option<bool>,
+}
+
+/// cr-018: POST /jobs — 异步提交，立即返回 job_id（cr-024: ?stream=true → SSE 流式 stdout）
 async fn create_job(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<StreamQuery>,
     Json(req): Json<CreateJobRequest>,
-) -> impl IntoResponse {
+) -> Response {
     // cr-018+#77: dry-run 模式——返回 profile 摘要，不执行任务
     if req.dry_run.unwrap_or(false) {
         return match state.scheduler.get_profile(&req.profile_name) {
@@ -289,6 +301,29 @@ async fn create_job(
         custom_env: req.custom_env.unwrap_or_default(),
         stdin_data: req.stdin.map(|s| s.into_bytes()),
     };
+
+    // cr-024: 流式模式 → text/event-stream(started → stdout… → result)
+    if q.stream.unwrap_or(false) {
+        let rx = state.scheduler.submit_streaming(job_req).await;
+        let stream = ReceiverStream::new(rx)
+            .map(|ev| -> Result<Event, std::convert::Infallible> {
+                Ok(match ev {
+                    StreamEvent::Started { job_id } => Event::default()
+                        .event("started")
+                        .json_data(serde_json::json!({ "job_id": job_id }))
+                        .unwrap_or_default(),
+                    StreamEvent::Stdout { data } => Event::default()
+                        .event("stdout")
+                        .json_data(serde_json::json!({ "data": data }))
+                        .unwrap_or_default(),
+                    StreamEvent::Result(r) => Event::default()
+                        .event("result")
+                        .json_data(&r)
+                        .unwrap_or_default(),
+                })
+            });
+        return Sse::new(stream).into_response();
+    }
 
     let job_id = state.scheduler.submit_async(job_req).await;
     (
@@ -598,6 +633,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// cr-024: POST /jobs?stream=true → text/event-stream,事件序 started/stdout/result。
+    #[tokio::test]
+    async fn create_job_stream_returns_sse_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let body = serde_json::json!({
+            "job_id": "sse-1",
+            "argv": ["/bin/echo", "line1"],
+            "profile_name": "shell",
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs?stream=true")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ct = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.contains("text/event-stream"), "content-type={ct}");
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("event:started") || text.contains("event: started"),
+            "no started event: {text}"
+        );
+        assert!(
+            text.contains("event:stdout") || text.contains("event: stdout"),
+            "no stdout event: {text}"
+        );
+        assert!(
+            text.contains("event:result") || text.contains("event: result"),
+            "no result event: {text}"
+        );
+        assert!(text.contains("line1"), "stdout missing line1: {text}");
     }
 
     #[tokio::test]

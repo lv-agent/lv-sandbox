@@ -28,6 +28,7 @@ sandbox-mcp = { path = "crates/sandbox-mcp" }
 # 异步运行时
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "signal", "io-util", "net"] }
 tokio-util = "0.7"
+tokio-stream = "0.1"
 
 # Landlock
 landlock = "0.4"
