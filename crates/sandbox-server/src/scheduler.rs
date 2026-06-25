@@ -171,7 +171,7 @@ impl Scheduler {
             let _permit = semaphore.acquire().await.expect("semaphore closed");
             let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
 
-            let result = runner.run_job_with_cancel(request, cancel).await;
+            let result = runner.run_job_with_cancel(request, cancel, None).await;
 
             timer.observe_duration();
             crate::metrics::JOB_FINISHED_TOTAL.inc();
@@ -213,6 +213,97 @@ impl Scheduler {
         });
 
         job_id
+    }
+
+    /// cr-024: 流式提交。返回 stdout/事件 receiver;job 仍入 jobs 表(可 cancel/get_job)。
+    ///
+    /// 后台任务与 submit_async 同(semaphore/metrics/audit),差别仅传 `Some(tx)` 给
+    /// run_job_with_cancel。result 同时经 channel(Result 事件)与 jobs 表(Done)两路给到客户端。
+    pub async fn submit_streaming(
+        &self,
+        request: JobRequest,
+    ) -> tokio::sync::mpsc::Receiver<sandbox_core::job::StreamEvent> {
+        let job_id = request.job_id.clone();
+        let profile = request.profile_name.clone();
+        let argv = request.argv.clone();
+        let cancel = CancellationToken::new();
+        let (tx, rx) =
+            tokio::sync::mpsc::channel::<sandbox_core::job::StreamEvent>(64);
+        self.jobs.write().expect("jobs lock poisoned").insert(
+            job_id.clone(),
+            JobEntry {
+                cancel: cancel.clone(),
+                state: JobState::Running,
+                created_at: Instant::now(),
+            },
+        );
+        self.audit.log(crate::audit::AuditEvent::new(
+            crate::audit::AuditEventType::JobStarted,
+            &job_id,
+            &profile,
+            argv.clone(),
+            None,
+            None,
+            None,
+            None,
+        ));
+
+        let runner = {
+            self.runner.read().expect("runner lock poisoned").clone()
+        };
+        let semaphore = self.semaphore.clone();
+        let jobs = self.jobs.clone();
+        let audit = self.audit.clone();
+        let jid = job_id.clone();
+        tokio::spawn(async move {
+            crate::metrics::JOB_STARTED_TOTAL.inc();
+            crate::metrics::RUNNING_JOBS.inc();
+            let _permit = semaphore.acquire().await.expect("semaphore closed");
+            let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
+
+            // cr-024: 传 Some(tx),run_job 边读边推 stdout + 终态 Result
+            let result = runner.run_job_with_cancel(request, cancel, Some(tx)).await;
+
+            timer.observe_duration();
+            crate::metrics::JOB_FINISHED_TOTAL.inc();
+            crate::metrics::RUNNING_JOBS.dec();
+            if let Ok(ref res) = result {
+                if res.timed_out {
+                    crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+                }
+            }
+
+            let result = result.unwrap_or_else(|e| sandbox_core::job::JobResult {
+                job_id: jid.clone(),
+                status: sandbox_core::job::JobStatus::Error(e.to_string()),
+                exit_code: None,
+                signal: None,
+                stdout: Vec::new(),
+                stderr: e.to_string().into_bytes(),
+                duration: std::time::Duration::ZERO,
+                timed_out: false,
+                sandbox_violations: vec![],
+                resource_usage: None,
+            });
+
+            audit.log(crate::audit::AuditEvent::new(
+                crate::audit::status_to_event_type(&result.status),
+                &jid,
+                &profile,
+                argv.clone(),
+                result.exit_code,
+                result.signal,
+                Some(result.duration.as_millis() as u64),
+                crate::audit::status_detail(&result.status),
+            ));
+
+            if let Some(entry) = jobs.write().expect("jobs lock poisoned").get_mut(&jid) {
+                entry.state = JobState::Done(result);
+            }
+            // tx 随任务结束 drop → channel 关 → receiver 流尾
+        });
+
+        rx
     }
 
     /// cr-018: 查询 job 状态/结果
@@ -575,5 +666,41 @@ mod tests {
             "DiskQuotaExceeded should map to JobKilled: {content}"
         );
         assert_eq!(events[1]["detail"], "disk quota exceeded");
+    }
+
+    // ==================== cr-024: 流式 submit_streaming ====================
+
+    /// cr-024: submit_streaming 的 receiver 依序收 Started + stdout + Result,且 job 跑完 get_job=Done。
+    #[tokio::test]
+    async fn submit_streaming_emits_events_and_registers_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let mut rx = scheduler
+            .submit_streaming(make_async_request("stream-001", &["/bin/echo", "hi"]))
+            .await;
+        let mut got_started = false;
+        let mut got_result = false;
+        let mut stdout = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                sandbox_core::job::StreamEvent::Started { job_id } => {
+                    assert_eq!(job_id, "stream-001");
+                    got_started = true;
+                }
+                sandbox_core::job::StreamEvent::Stdout { data } => stdout.push_str(&data),
+                sandbox_core::job::StreamEvent::Result(_) => got_result = true,
+            }
+        }
+        assert!(got_started, "missing Started");
+        assert!(got_result, "missing Result");
+        assert!(stdout.contains("hi"), "stdout: {stdout:?}");
+
+        let state = wait_until_done(&scheduler, "stream-001").await;
+        assert!(
+            matches!(state, Some(JobState::Done(_))),
+            "streamed job should register as Done, got {state:?}"
+        );
     }
 }
