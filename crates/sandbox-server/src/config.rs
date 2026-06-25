@@ -38,6 +38,9 @@ pub struct ServerSection {
     pub log_level: String,
     #[serde(default = "default_log_format")]
     pub log_format: String,
+    /// cr-021: 审计日志(默认关)
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 fn default_listen_addr() -> String {
@@ -60,6 +63,29 @@ impl Default for ServerSection {
             max_concurrent_jobs: default_max_concurrent(),
             log_level: default_log_level(),
             log_format: default_log_format(),
+            audit: AuditConfig::default(),
+        }
+    }
+}
+
+/// cr-021: 审计日志配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_audit_path")]
+    pub path: String,
+}
+
+fn default_audit_path() -> String {
+    "/var/log/sandbox/audit.jsonl".to_string()
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: default_audit_path(),
         }
     }
 }
