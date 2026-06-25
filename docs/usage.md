@@ -162,6 +162,26 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
 
 `status` values: `Completed`, `TimedOut`, `Killed`, `Cancelled`, `Error`.
 
+### Streaming stdout (SSE)
+
+Add `?stream=true` to get the response as a `text/event-stream` of live stdout
+instead of a `job_id`. Events:
+
+- `started` — `{"job_id": "..."}` (first event)
+- `stdout` — `{"data": "<chunk>"}` (one per output chunk; UTF-8, binary is lossy)
+- `result` — the final `JobResult` (status, exit_code, stdout, stderr, …; last
+  event, then the stream closes)
+
+stderr is **not** streamed — it only appears in the `result` event. The job runs
+under the full sandbox profile (landlock/seccomp/cgroup/timeout/cancel/quota), is
+registered for cancel, and queryable via `GET /jobs/{id}` after the stream.
+
+```bash
+curl -N -X POST 'http://127.0.0.1:8080/api/v1/jobs?stream=true' \
+  -H 'content-type: application/json' \
+  -d '{"job_id":"s","argv":["/bin/sh","-c","for i in 1 2 3; do echo tick $i; sleep 0.2; done"],"profile_name":"shell"}'
+```
+
 ### Output redaction
 
 `stdout`/`stderr` in `GET /jobs/{id}` responses are redacted — common secret

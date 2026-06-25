@@ -150,6 +150,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs/demo-1/cancel
 
 `status` 可能值：`Completed`、`TimedOut`、`Killed`、`Cancelled`、`Error`。
 
+### 流式 stdout（SSE）
+
+加 `?stream=true`,响应变成 `text/event-stream`,实时推 stdout 而非返回 `job_id`。事件:
+
+- `started` — `{"job_id": "..."}`(首个事件)
+- `stdout` — `{"data": "<块>"}`(每个输出块一条;UTF-8,二进制 lossy)
+- `result` — 终态 `JobResult`(status、exit_code、stdout、stderr……;末事件,发完关流)
+
+stderr **不流式**——只出现在 `result` 事件里。job 跑在全 profile 约束下
+(landlock/seccomp/cgroup/timeout/cancel/quota),已注册可 cancel,流结束后仍可
+`GET /jobs/{id}` 查询。
+
+```bash
+curl -N -X POST 'http://127.0.0.1:8080/api/v1/jobs?stream=true' \
+  -H 'content-type: application/json' \
+  -d '{"job_id":"s","argv":["/bin/sh","-c","for i in 1 2 3; do echo tick $i; sleep 0.2; done"],"profile_name":"shell"}'
+```
+
 ### 输出脱敏
 
 `GET /jobs/{id}` 响应中的 `stdout`/`stderr` 会被脱敏——常见密钥模式（Bearer token、AWS `AKIA` 密钥、GitHub token、PEM 私钥）在返回前替换为 `[REDACTED]`，避免任务误读的凭证（如 `~/.aws/credentials`）泄露进 agent 上下文。
