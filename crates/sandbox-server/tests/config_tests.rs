@@ -148,6 +148,7 @@ fn profile_config_to_sandbox_profile_default_fill() {
         max_stderr_mb: None,
         default_timeout: None,
         egress_allowlist: None,
+        disk_quota_mb: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -184,6 +185,7 @@ fn profile_config_to_custom_values_override_defaults() {
         max_stderr_mb: Some(15),
         default_timeout: Some("60s".to_string()),
         egress_allowlist: None,
+        disk_quota_mb: Some(50),
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -205,6 +207,8 @@ fn profile_config_to_custom_values_override_defaults() {
     assert_eq!(profile.default_timeout, std::time::Duration::from_secs(60));
     // extra_readonly_paths
     assert_eq!(profile.extra_readonly_paths.len(), 2);
+    // cr-022: disk_quota_mb 透传(MB)
+    assert_eq!(profile.disk_quota_mb, Some(50));
 }
 
 #[test]

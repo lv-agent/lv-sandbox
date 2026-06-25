@@ -31,6 +31,8 @@ pub struct SandboxProfile {
     pub extra_readonly_paths: Vec<PathBuf>,
     /// cr-019: 出站白名单。空 = 零出站(默认)。
     pub egress_allowlist: Vec<crate::egress::EgressRule>,
+    /// cr-022: 工作区聚合磁盘上限(MB)。None = 不限(默认,看门狗不起)。
+    pub disk_quota_mb: Option<u64>,
 }
 
 impl SandboxProfile {
@@ -66,6 +68,7 @@ impl SandboxProfile {
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
+            disk_quota_mb: None,
         }
     }
 
@@ -96,6 +99,7 @@ impl SandboxProfile {
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
+            disk_quota_mb: None,
         }
     }
 
@@ -126,6 +130,7 @@ impl SandboxProfile {
             default_timeout: Duration::from_secs(5),
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
+            disk_quota_mb: None,
         }
     }
 }

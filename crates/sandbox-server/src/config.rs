@@ -142,6 +142,9 @@ pub struct ProfileConfig {
     /// cr-019: 出站白名单。空/缺省 = 零出站。
     #[serde(default)]
     pub egress_allowlist: Option<Vec<sandbox_core::egress::EgressRule>>,
+    /// cr-022: 工作区聚合磁盘上限(MB)。None/缺省 = 不限(看门狗不起)。
+    #[serde(default)]
+    pub disk_quota_mb: Option<u64>,
 }
 
 /// rlimit 配置（文件友好，使用人类可读单位）
@@ -245,6 +248,7 @@ impl ProfileConfig {
             fail_closed: sandbox_section.fail_closed,
             extra_readonly_paths,
             egress_allowlist: self.egress_allowlist.clone().unwrap_or_default(),
+            disk_quota_mb: self.disk_quota_mb,
         })
     }
 }
