@@ -161,6 +161,22 @@ profiles:
 - `*` 只匹配最左单个 label（`*.pypi.org` 命中 `download.pypi.org`，不命中 `a.b.pypi.org`）。
 - `dry_run: true` 的响应含 `egress_allowlist`，可预览将放行哪些 host。
 
+### 磁盘配额(每任务)
+
+profile 可给任务的**聚合**工作区用量设上限。配 `disk_quota_mb`;任务工作区增长
+超过上限即被收割(`SIGTERM` → `SIGKILL`),结果 `status` 为 `DiskQuotaExceeded`。
+
+```yaml
+profiles:
+  heavy:
+    disk_quota_mb: 50      # 工作区聚合上限(MB);缺省 = 不限
+```
+
+工作方式:看门狗每 250ms 测一次工作区大小,超过上限即杀整进程组。这是**尽力而为**
+——两次轮询间的突发写最多超出 `250ms × 写速`;单文件 `fsize_mb` rlimit 收窄该窗口。
+`disk_quota_mb` 限**总**工作区,`fsize_mb` 限**单文件**(两者互补)。`dry_run: true`
+的响应含该上限。缺省 = 不限(默认)。
+
 ### Profile
 
 内置三个 profile，按任务运行时选择：
@@ -262,6 +278,7 @@ profiles:
       cpu_seconds: 10
     max_stdout_mb: 20
     default_timeout: "60s"
+    disk_quota_mb: 100          # cr-022: 工作区聚合上限(MB);缺省 = 不限
     extra_readonly_paths:
       - "/data/shared"
 ```

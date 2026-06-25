@@ -43,7 +43,9 @@ in `pre_exec` after environment capability detection):
 - A task reading/writing another task's files, or sensitive host files.
 - Snooping other tasks via `/proc` (`cmdline`/`maps`/`environ`).
 - Fork bombs, fd exhaustion, infinite CPU (resource caps + timeout).
-- Filling the workspace (resource limits + disk watermark admission).
+- Filling the workspace (resource limits + disk watermark admission + opt-in
+  per-task `disk_quota_mb` watchdog that reaps a task whose workspace exceeds
+  the cap).
 - Escaping timeouts via background processes (whole-group cleanup).
 - Calling dangerous syscalls.
 - **Making network connections** — `socket(AF_INET, …)` is killed; egress is

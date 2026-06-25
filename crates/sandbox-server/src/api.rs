@@ -133,6 +133,9 @@ struct DryRunSummary {
     fail_closed: bool,
     /// cr-019: 出站白名单（空 = 零出站）
     egress_allowlist: Vec<EgressRuleView>,
+    /// cr-022: 工作区聚合上限（MB）。None = 不限。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disk_quota_mb: Option<u64>,
 }
 
 /// cr-019: dry-run / 响应中的单条出站规则视图
@@ -198,6 +201,7 @@ async fn create_job(
                             port: r.port,
                         })
                         .collect(),
+                    disk_quota_mb: profile.disk_quota_mb,
                 }),
             )
                 .into_response(),

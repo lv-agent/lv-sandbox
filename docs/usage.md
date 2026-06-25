@@ -180,6 +180,25 @@ profiles:
   not `a.b.pypi.org`).
 - `dry_run: true` returns the profile's `egress_allowlist` for previewing.
 
+### Disk quota (per-task)
+
+A profile can cap a task's **aggregate** workspace usage. Set `disk_quota_mb`; a
+task whose workspace grows past the cap is reaped (`SIGTERM` → `SIGKILL`) and the
+result carries `status: "DiskQuotaExceeded"`.
+
+```yaml
+profiles:
+  heavy:
+    disk_quota_mb: 50      # workspace aggregate cap in MB; unset = unlimited
+```
+
+How it works: a watchdog measures the workspace size every 250 ms and kills the
+whole process group once the cap is exceeded. This is **best-effort** — a bursty
+write can overshoot by up to `250 ms × write-rate` between polls; the per-file
+`fsize_mb` rlimit narrows that window. `disk_quota_mb` caps the *total* workspace;
+`fsize_mb` caps a *single file* (they compose). `dry_run: true` returns the cap
+for previewing. Unset = no cap (the default).
+
 ### Profiles
 
 Three built-in profiles, chosen per task at submit time:
@@ -286,6 +305,7 @@ profiles:
       cpu_seconds: 10
     max_stdout_mb: 20
     default_timeout: "60s"
+    disk_quota_mb: 100          # cr-022: workspace aggregate cap (MB); unset = unlimited
     extra_readonly_paths:
       - "/data/shared"
 ```
