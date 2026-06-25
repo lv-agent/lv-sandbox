@@ -488,4 +488,92 @@ mod tests {
             "argv should contain hello: {content}"
         );
     }
+
+    // ==================== cr-022 gap: 异步路径 + 审计映射覆盖 ====================
+
+    /// 构造带 1MB 配额的 runner(nproc 放开 + fsize 抬高,见 disk_quota_tests 注释)。
+    async fn make_quota_runner(base: &Path) -> SandboxRunner {
+        let mut runner = make_runner(base).await;
+        let mut rlimit = sandbox_core::profile::SandboxProfile::shell().rlimit;
+        rlimit.nproc = None;
+        rlimit.fsize_bytes = Some(1024 * 1024 * 1024);
+        runner.register_profile(sandbox_core::profile::SandboxProfile {
+            name: "quota".to_string(),
+            disk_quota_mb: Some(1),
+            rlimit,
+            ..sandbox_core::profile::SandboxProfile::shell()
+        });
+        runner
+    }
+
+    fn quota_write_request(job_id: &str) -> JobRequest {
+        JobRequest {
+            job_id: job_id.to_string(),
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "yes | head -c 200000000 > big; /bin/sleep 5".into(),
+            ],
+            profile_name: "quota".into(),
+            timeout: Some(Duration::from_secs(10)),
+            custom_env: HashMap::new(),
+            stdin_data: None,
+        }
+    }
+
+    /// cr-022 gap: scheduler 异步路径(submit_async → run_job_with_cancel)透出
+    /// DiskQuotaExceeded。核心 disk_quota_tests 直跑 run_job,绕过调度器;本测试补全该路径。
+    #[tokio::test]
+    async fn quota_exceeded_surfaces_via_async_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_quota_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        let jid = scheduler.submit_async(quota_write_request("async-quota-001")).await;
+        let state = wait_until_done(&scheduler, &jid).await;
+        assert!(
+            matches!(
+                state,
+                Some(JobState::Done(ref r)) if matches!(
+                    r.status,
+                    sandbox_core::job::JobStatus::DiskQuotaExceeded
+                )
+            ),
+            "async quota-exceeded job should be Done(DiskQuotaExceeded), actual: {:?}",
+            state
+        );
+    }
+
+    /// cr-022 gap: 审计映射 DiskQuotaExceeded → JobKilled + detail="disk quota exceeded"
+    /// (cr-021 的 audit 测试只覆盖 Started/Completed;新映射分支在此锁定)。
+    #[tokio::test]
+    async fn audit_logs_disk_quota_exceeded_as_jobkilled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let audit_path = tmp.path().join("audit.jsonl");
+        let logger = crate::audit::AuditLogger::file(&audit_path).unwrap();
+
+        let runner = make_quota_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10).with_audit(logger);
+
+        scheduler
+            .submit_async(quota_write_request("audit-quota-001"))
+            .await;
+        let state = wait_until_done(&scheduler, "audit-quota-001").await;
+        assert!(matches!(state, Some(JobState::Done(_))));
+
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        let events: Vec<serde_json::Value> = content
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(events.len(), 2, "Started + terminal: {content}");
+        assert_eq!(events[0]["event_type"], "JobStarted");
+        assert_eq!(
+            events[1]["event_type"], "JobKilled",
+            "DiskQuotaExceeded should map to JobKilled: {content}"
+        );
+        assert_eq!(events[1]["detail"], "disk quota exceeded");
+    }
 }

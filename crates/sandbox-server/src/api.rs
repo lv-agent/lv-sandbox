@@ -524,6 +524,57 @@ mod tests {
         assert!(json["landlock"].as_str().unwrap().contains("Shell"));
     }
 
+    /// cr-022 gap: dry_run 暴露 profile 的 disk_quota_mb。
+    async fn make_app_with_quota_profile(tmp: &std::path::Path) -> Router {
+        let config = SandboxConfig {
+            sandbox_base_dir: tmp.to_path_buf(),
+            disk_watermark_bytes: 0,
+        };
+        let mut runner = SandboxRunner::new(&config).await.unwrap();
+        runner.register_profile(sandbox_core::profile::SandboxProfile {
+            name: "quota_dry".to_string(),
+            disk_quota_mb: Some(50),
+            ..sandbox_core::profile::SandboxProfile::shell()
+        });
+        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        app(AppState {
+            scheduler,
+            config_path: std::path::PathBuf::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn dry_run_surfaces_disk_quota_mb() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_quota_profile(tmp.path()).await;
+        let body = serde_json::json!({
+            "job_id": "dry-quota",
+            "argv": ["/bin/echo", "x"],
+            "profile_name": "quota_dry",
+            "dry_run": true,
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["disk_quota_mb"], 50,
+            "dry_run should surface disk_quota_mb: {json}"
+        );
+    }
+
     #[tokio::test]
     async fn reload_returns_new_profile_list() {
         let tmp = tempfile::tempdir().unwrap();

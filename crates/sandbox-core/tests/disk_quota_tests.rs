@@ -28,23 +28,27 @@ fn req(job_id: &str, argv: &[&str], profile: &str) -> JobRequest {
     }
 }
 
+/// 构造配额 profile。disk_quota_mb 是被测约束;
+/// - nproc=None:RLIMIT_NPROC 是 per-uid,测试机当前用户进程数远超 shell 默认 32,
+///   会让 `yes|head` 管道的 fork 立刻 EAGAIN("Cannot fork");测试中放开。
+/// - fsize=1GB:高于配额,确保聚合看门狗先于单文件 fsize(SIGXFSZ)触发。
+fn quota_profile(name: &str, mb: u64) -> SandboxProfile {
+    let mut rlimit = SandboxProfile::shell().rlimit;
+    rlimit.nproc = None;
+    rlimit.fsize_bytes = Some(1024 * 1024 * 1024);
+    SandboxProfile {
+        name: name.to_string(),
+        disk_quota_mb: Some(mb),
+        rlimit,
+        ..SandboxProfile::shell()
+    }
+}
+
 /// cr-022: profile 配 disk_quota_mb 后,工作区聚合写入超限 → 看门狗收割 → DiskQuotaExceeded。
 #[tokio::test]
 async fn disk_quota_exceeded_when_workspace_grows_past_limit() {
     let (_tmp, mut runner) = make_runner().await;
-    // 测试 profile:disk_quota_mb=1MB 是唯一紧约束。
-    // - nproc=None:RLIMIT_NPROC 是 per-uid,测试机当前用户进程数远超 shell 默认的 32,
-    //   会让 `yes|head` 管道的 fork 立刻 EAGAIN("Cannot fork");测试中放开。
-    // - fsize=1GB:高于 1MB 配额,确保聚合看门狗先于单文件 fsize(SIGXFSZ)触发。
-    let mut rlimit = SandboxProfile::shell().rlimit;
-    rlimit.nproc = None;
-    rlimit.fsize_bytes = Some(1024 * 1024 * 1024);
-    runner.register_profile(SandboxProfile {
-        name: "quota".to_string(),
-        disk_quota_mb: Some(1),
-        rlimit,
-        ..SandboxProfile::shell()
-    });
+    runner.register_profile(quota_profile("quota", 1));
 
     // 写 200MB 到工作区(远超 1MB 配额);head 后接 sleep,保证轮询 tick 命中时进程仍在。
     let result = runner
@@ -70,6 +74,56 @@ async fn disk_quota_exceeded_when_workspace_grows_past_limit() {
         result.sandbox_violations
     );
     assert!(!result.timed_out, "must not be a timeout");
+}
+
+/// cr-022 防误杀:写入量低于配额 → 正常 Completed(看门狗不应在配额内触发)。
+#[tokio::test]
+async fn disk_quota_under_limit_completes_normally() {
+    let (_tmp, mut runner) = make_runner().await;
+    runner.register_profile(quota_profile("quota", 50));
+
+    // 写 5MB,远低于 50MB 配额 → 正常完成。
+    let result = runner
+        .run_job(
+            req(
+                "under-001",
+                &["/bin/sh", "-c", "yes | head -c 5000000 > small; echo done"],
+                "quota",
+            ),
+        )
+        .await
+        .expect("run_job should not error");
+
+    assert!(
+        matches!(result.status, JobStatus::Completed),
+        "under-quota task should complete, got {:?}",
+        result.status
+    );
+    assert!(
+        result.sandbox_violations.is_empty(),
+        "no violations expected, got {:?}",
+        result.sandbox_violations
+    );
+}
+
+/// cr-022 聚合:每个单文件都低于配额,但聚合后超限 → 仍被收割(证明 dir_size 跨文件求和,
+/// 而非只测单文件)。配额 2MB,写 3 个 1MB 文件(每个 < 配额,合计 3MB > 配额)。
+#[tokio::test]
+async fn disk_quota_aggregates_across_many_files() {
+    let (_tmp, mut runner) = make_runner().await;
+    runner.register_profile(quota_profile("quota", 2));
+
+    let cmd = "yes | head -c 1000000 > a; yes | head -c 1000000 > b; yes | head -c 1000000 > c; /bin/sleep 5";
+    let result = runner
+        .run_job(req("agg-001", &["/bin/sh", "-c", cmd], "quota"))
+        .await
+        .expect("run_job should not error");
+
+    assert!(
+        matches!(result.status, JobStatus::DiskQuotaExceeded),
+        "aggregate over quota should be killed, got {:?}",
+        result.status
+    );
 }
 
 /// cr-022 回归:profile 不设 disk_quota_mb → 看门狗不起,正常 Completed。
