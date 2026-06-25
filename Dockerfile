@@ -1,7 +1,7 @@
 # lv-sandbox 多阶段构建
 #   builder: rust:1-bookworm + libseccomp-dev 编译
-#   runtime: debian:bookworm-slim + libseccomp2 运行（非 root）
-# 构建命令: docker build -t lv-sandbox:0.2.0 .
+#   runtime: debian:bookworm-slim + libseccomp2 + curl（非 root；curl 供 demo/排查用）
+# 构建命令: docker build -t lv-sandbox:0.2.1 .
 
 # ---- builder：编译阶段（需要 libseccomp-dev 头文件 + pkg-config）----
 FROM rust:1-bookworm AS builder
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ---- runtime：运行阶段（仅需 libseccomp2 运行时）----
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends libseccomp2 ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends libseccomp2 ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 # 非 root 用户（uid 10000），与 docs/architecture.md 推荐部署对齐
 RUN groupadd --gid 10000 sandbox && \

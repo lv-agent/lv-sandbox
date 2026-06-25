@@ -4,13 +4,13 @@
 #
 # 用法:
 #   bash scripts/verify-image.sh [IMAGE]
-#   IMAGE 默认 lv-sandbox:0.2.0
+#   IMAGE 默认 lv-sandbox:0.2.1
 #
 # 前提: 当前用户在 docker 组（重新登录生效，或用 `sg docker -c "bash scripts/verify-image.sh"`）
 # /sandboxes 用 tmpfs（验证用，无需 host 目录/chown）；生产部署用 host 卷，见 docs/usage.md
 set -euo pipefail
 
-IMAGE="${1:-${IMAGE:-lv-sandbox:0.2.0}}"
+IMAGE="${1:-${IMAGE:-lv-sandbox:0.2.1}}"
 HOST_PORT="${HOST_PORT:-18080}"
 NAME="sandbox-verify-$$"
 

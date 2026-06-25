@@ -18,7 +18,7 @@ privilege-escalation attempts.
 
 ## Status
 
-> **v0.2.0 — early, not security-audited.** lv-sandbox is a young open-source
+> **v0.2.1 — early, not security-audited.** lv-sandbox is a young open-source
 > project with no external security audit. Decide fit using the threat model in
 > [security.md](docs/security.md).
 
@@ -73,14 +73,14 @@ a single worker — fast cold-start, low overhead, high throughput.
 **Docker (recommended)**:
 
 ```bash
-# Pull the published image (or build locally: docker build -t lv-sandbox:0.2.0 .)
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.0
+# Pull the published image (or build locally: docker build -t lv-sandbox:0.2.1 .)
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.1
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.2.0
+  ghcr.io/lv-agent/lv-sandbox:v0.2.1
 # (production: use a host volume for /sandboxes and chown it 10000:10000 — see docs/usage.md)
 ```
 
@@ -119,15 +119,16 @@ curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
 curl -s localhost:8080/api/v1/jobs/secret
 # → {"status":"Completed","exit_code":1,"stderr":"/bin/cat: /etc/passwd: Permission denied\n",...}
+
+# try to "phone home" — seccomp kills the socket
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/net
+# → {"status":"Killed",...}   (curl never reached the network)
 ```
 
-Normal commands run; a task that reaches outside its workspace is contained — **no container
-per task, no privileges.**
-
-> **Network is blocked too** — seccomp kills `socket(AF_INET)`. The slim image ships no
-> `curl`/`python` to show it inline; install a runtime into the image, or run
-> `cargo test -p sandbox-e2e --test network_egress` to see the kill. For *controlled*,
-> allowlisted egress see [network-isolation.md](docs/network-isolation.md).
+Normal commands run; dangerous ones are contained — **no container per task, no privileges,
+no phoning home.** For *controlled*, allowlisted egress see [network-isolation.md](docs/network-isolation.md).
 
 ## Documentation
 

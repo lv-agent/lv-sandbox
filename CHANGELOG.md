@@ -5,6 +5,18 @@ All notable changes to lv-sandbox are documented here. The format is based on
 adheres to [Semantic Versioning](https://semver.org/) (0.x: breaking changes
 are allowed in minor bumps).
 
+## [0.2.1] — 2026-06-25
+
+### Added
+- The runtime Docker image now ships **`curl`** (for the "phone home → `Killed`" demo and
+  ad-hoc debugging). The README quick demo's network example works against the published
+  image out of the box.
+
+### Fixed
+- README quickstart `docker run` switched `/sandboxes` to a `tmpfs` (`uid=10000`) — the
+  previous host-volume mount needed a manual `chown 10000:10000` or every job errored with
+  `Permission denied` at workspace creation. The demo is now self-contained.
+
 ## [0.2.0] — 2026-06-25
 
 ### Highlights

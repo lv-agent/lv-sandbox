@@ -6,7 +6,7 @@
 
 ## 状态
 
-> **v0.2.0 —— 早期版本,未做外部安全审计。** lv-sandbox 是一个年轻的开源项目,
+> **v0.2.1 —— 早期版本,未做外部安全审计。** lv-sandbox 是一个年轻的开源项目,
 > 尚未经过外部安全审计。请对照 [security.md](docs/security.md) 的威胁模型判断是否适用。
 
 **适用** —— 运行 AI Agent 生成的命令,需要内核级失败半径控制又不想"一任务一容器";
@@ -35,14 +35,14 @@ lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是
 **Docker（推荐）**：
 
 ```bash
-# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.2.0 .）
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.0
+# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.2.1 .）
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.1
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.2.0
+  ghcr.io/lv-agent/lv-sandbox:v0.2.1
 # (生产环境:给 /sandboxes 用 host 卷并 chown 10000:10000,见 docs/zh/usage.md)
 ```
 
@@ -79,13 +79,15 @@ curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
 curl -s localhost:8080/api/v1/jobs/secret
 # → {"status":"Completed","exit_code":1,"stderr":"/bin/cat: /etc/passwd: Permission denied\n",...}
+
+# 想"phone home" → seccomp 杀掉 socket
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/net
+# → {"status":"Killed",...}   (curl 根本没碰到网络)
 ```
 
-正常命令照跑,越界的操作被兜住——**不靠一任务一容器、不要特权**。
-
-> **网络也封了**——seccomp 杀掉 `socket(AF_INET)`。slim 镜像里没有 `curl`/`python`
-> 没法直接演示;往镜像里装个运行时,或跑 `cargo test -p sandbox-e2e --test network_egress`
-> 看被杀的效果。要**受控白名单出站**见 [network-isolation.md](docs/zh/network-isolation.md)。
+正常命令照跑,危险操作被兜住——**不靠一任务一容器、不要特权、不会外联**。要**受控白名单出站**见 [network-isolation.md](docs/zh/network-isolation.md)。
 
 ## 文档
 
