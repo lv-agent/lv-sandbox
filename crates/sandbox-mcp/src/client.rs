@@ -14,6 +14,8 @@ use uuid::Uuid;
 pub struct SandboxHttpClient {
     base_url: String,
     client: reqwest::Client,
+    /// cr-023: 可选 Bearer key(None = 不带)。
+    api_key: Option<String>,
 }
 
 impl SandboxHttpClient {
@@ -21,7 +23,22 @@ impl SandboxHttpClient {
         Ok(Self {
             base_url: base_url.into(),
             client: reqwest::Client::builder().build()?,
+            api_key: None,
         })
+    }
+
+    /// cr-023: 注入 API key(builder,`new` 签名不变,测试零改动)。
+    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
+        self.api_key = api_key;
+        self
+    }
+
+    /// cr-023: 给请求加 Bearer header(Some 时)。
+    fn add_auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(k) => rb.bearer_auth(k),
+            None => rb,
+        }
     }
 
     /// sandbox-server 基地址
@@ -46,9 +63,11 @@ impl SandboxHttpClient {
         });
         // POST /jobs（create，立即返回 job_id）
         let resp = self
-            .client
-            .post(format!("{}/api/v1/jobs", self.base_url))
-            .json(&body)
+            .add_auth(
+                self.client
+                    .post(format!("{}/api/v1/jobs", self.base_url))
+                    .json(&body),
+            )
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -61,8 +80,10 @@ impl SandboxHttpClient {
                 return Err(anyhow!("job {} polling timed out (300s)", job_id));
             }
             let get = self
-                .client
-                .get(format!("{}/api/v1/jobs/{}", self.base_url, job_id))
+                .add_auth(
+                    self.client
+                        .get(format!("{}/api/v1/jobs/{}", self.base_url, job_id)),
+                )
                 .send()
                 .await?;
             if !get.status().is_success() {
@@ -89,8 +110,10 @@ impl SandboxHttpClient {
     /// 列出可用 profile
     pub async fn get_profiles(&self) -> Result<ProfilesInfo> {
         let resp = self
-            .client
-            .get(format!("{}/api/v1/profiles", self.base_url))
+            .add_auth(
+                self.client
+                    .get(format!("{}/api/v1/profiles", self.base_url)),
+            )
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -102,8 +125,10 @@ impl SandboxHttpClient {
     /// 查询 worker 状态
     pub async fn get_status(&self) -> Result<StatusInfo> {
         let resp = self
-            .client
-            .get(format!("{}/api/v1/status", self.base_url))
+            .add_auth(
+                self.client
+                    .get(format!("{}/api/v1/status", self.base_url)),
+            )
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -114,9 +139,10 @@ impl SandboxHttpClient {
 
     /// 热重载配置。config_path 作为 query 传递（server 当前用启动路径）。
     pub async fn reload(&self, params: &SandboxReloadParams) -> Result<ReloadInfo> {
-        let mut req = self
-            .client
-            .post(format!("{}/api/v1/reload", self.base_url));
+        let mut req = self.add_auth(
+            self.client
+                .post(format!("{}/api/v1/reload", self.base_url)),
+        );
         if let Some(ref p) = params.config_path {
             req = req.query(&[("path", p)]);
         }
@@ -293,5 +319,27 @@ mod tests {
         let client = SandboxHttpClient::new(server.uri()).unwrap();
         let result = client.submit(&run_params(None)).await;
         assert!(result.is_err(), "5xx should return error");
+    }
+
+    /// cr-023: with_api_key 后请求带 `Authorization: Bearer <key>`。
+    #[tokio::test]
+    async fn with_api_key_sends_bearer_header() {
+        use wiremock::matchers::{header, method, path};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/profiles"))
+            .and(header("authorization", "Bearer mykey"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "profiles": ["shell"] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = SandboxHttpClient::new(server.uri())
+            .unwrap()
+            .with_api_key(Some("mykey".into()));
+        let info = client.get_profiles().await.unwrap();
+        assert_eq!(info.profiles, vec!["shell"]);
     }
 }
