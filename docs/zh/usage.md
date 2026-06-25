@@ -83,6 +83,18 @@ cargo build --workspace --release
 | `GET` | `/metrics` | Prometheus 指标 |
 | `GET` | `/health` | 就绪检查——landlock/cgroup/seccomp 状态 + 磁盘水位 |
 
+### 鉴权
+
+默认无鉴权(本地零摩擦开发)。配 `server.api_key` 后,`/api/v1/*` 与 `/metrics`
+需带 `Authorization: Bearer <key>` 头;`/health` 仍放行(探活)。缺失或错误凭证
+返回 `401 {"error":"unauthorized"}`(常量时间比较)。开启后,`sandbox-mcp` 须配
+`SANDBOX_API_KEY` 同值,否则网关被拒。
+
+```yaml
+server:
+  api_key: "secret-token"   # 缺省 = 不鉴权(默认)
+```
+
 ### 提交任务（异步）
 
 提交后立即返回 `job_id`（`202 Accepted`），任务在后台执行。轮询 `GET /jobs/{id}` 获取结果。
@@ -246,6 +258,7 @@ server:
   audit:                        # cr-021: 审计日志(默认关)
     enabled: false
     path: "/var/log/sandbox/audit.jsonl"
+  api_key: "secret-token"       # cr-023: Bearer token;缺省 = 不鉴权(默认)
 
 sandbox:
   base_dir: "/sandboxes"        # 任务工作空间根目录

@@ -100,8 +100,10 @@ seccomp-based, not netns-based).
 
 ## Operational notes
 
-- **No built-in auth** on the HTTP API — place the server behind your own
-  auth/network boundary in production.
+- **Optional Bearer API key** on the HTTP API — set `server.api_key` to require
+  `Authorization: Bearer <key>` on `/api/v1/*` and `/metrics` (off by default;
+  `/health` stays open for probes). Even with it on, place the server behind
+  your own network boundary in production.
 - **Completed jobs are evicted** from the in-memory table. For a durable record,
   enable `server.audit` (a JSONL audit trail of every job's command + outcome);
   otherwise capture results/`/metrics` externally.

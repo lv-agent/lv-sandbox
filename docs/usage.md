@@ -90,6 +90,20 @@ Config lookup order: `--config` arg > `SANDBOX_CONFIG` env > `/etc/sandbox-serve
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/health` | readiness — landlock/cgroup/seccomp status + disk watermark |
 
+### Authentication
+
+By default the API has no authentication (zero-friction local dev). Set
+`server.api_key` to require an `Authorization: Bearer <key>` header on
+`/api/v1/*` and `/metrics`; `/health` stays open for readiness probes. Missing
+or wrong credentials return `401 {"error":"unauthorized"}` (constant-time
+compare). If enabled, `sandbox-mcp` must set `SANDBOX_API_KEY` to the same value,
+otherwise the gateway is rejected.
+
+```yaml
+server:
+  api_key: "secret-token"   # unset = no auth (default)
+```
+
 ### Submit a task (async)
 
 Submit returns the `job_id` immediately (`202 Accepted`); the task runs in the
@@ -273,6 +287,7 @@ server:
   audit:                        # cr-021: opt-in audit log (off by default)
     enabled: false
     path: "/var/log/sandbox/audit.jsonl"
+  api_key: "secret-token"       # cr-023: Bearer token; unset = no auth (default)
 
 sandbox:
   base_dir: "/sandboxes"        # task workspace root
