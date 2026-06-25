@@ -60,3 +60,14 @@ pub struct JobResult {
     pub sandbox_violations: Vec<SandboxViolation>,
     pub resource_usage: Option<ResourceSummary>,
 }
+
+/// cr-024: 流式事件(run_job_with_cancel 在 streaming 模式经 channel 推送)。
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// 进程已启动(首个事件)
+    Started { job_id: String },
+    /// stdout 数据块(UTF-8 字符串;二进制 lossy,与现有 stdout 字符串化一致)
+    Stdout { data: String },
+    /// 终态结果(末事件,发完关流)
+    Result(JobResult),
+}

@@ -6,11 +6,12 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use crate::capability::CapabilityReport;
 use crate::env::build_sanitized_env;
 use crate::error::CoreError;
-use crate::job::{JobRequest, JobResult, JobStatus, SandboxViolation};
+use crate::job::{JobRequest, JobResult, JobStatus, SandboxViolation, StreamEvent};
 use crate::process::PreparedSandboxContext;
 use crate::profile::{ProfileRegistry, SandboxProfile};
 use crate::workspace::WorkspaceManager;
@@ -54,7 +55,7 @@ impl SandboxRunner {
 
     /// 执行单个 job。完整生命周期管理。（cr-018: 委托 run_job_with_cancel，cancel 永不触发）
     pub async fn run_job(&self, request: JobRequest) -> Result<JobResult, CoreError> {
-        self.run_job_with_cancel(request, tokio_util::sync::CancellationToken::new())
+        self.run_job_with_cancel(request, tokio_util::sync::CancellationToken::new(), None)
             .await
     }
 
@@ -63,6 +64,8 @@ impl SandboxRunner {
         &self,
         request: JobRequest,
         cancel: tokio_util::sync::CancellationToken,
+        // cr-024: 流式 stdout sink。None = 不流式(默认,read_to_end)。
+        stdout_sink: Option<mpsc::Sender<StreamEvent>>,
     ) -> Result<JobResult, CoreError> {
         let start = tokio::time::Instant::now();
 
@@ -205,17 +208,52 @@ impl SandboxRunner {
             }
         }
 
-        // 11. 取出 stdout/stderr pipe，并发读取
+        // cr-024: 流式模式首个事件(Started)。sink 为 None 时此 if 不执行。
+        if let Some(ref sink) = stdout_sink {
+            let _ = sink
+                .send(StreamEvent::Started {
+                    job_id: request.job_id.clone(),
+                })
+                .await;
+        }
+
+        // 11. 取出 stdout/stderr pipe，并发读取（stderr 不流式,只进终态结果）
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
 
+        let task_sink = stdout_sink.clone();
         let stdout_handle = tokio::spawn(async move {
             let mut buf = Vec::new();
             if let Some(mut out) = stdout_pipe {
-                let _ = out.read_to_end(&mut buf).await;
-            }
-            if buf.len() > max_stdout {
-                buf.truncate(max_stdout);
+                match task_sink {
+                    Some(sink) => {
+                        // cr-024: 分块读,每块发 sink + 累计(累计仍用于 max_stdout 截断 + 终态 stdout)
+                        let mut chunk = vec![0u8; 8192];
+                        loop {
+                            match out.read(&mut chunk).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    let data = chunk[..n].to_vec();
+                                    let room = max_stdout.saturating_sub(buf.len());
+                                    if room > 0 {
+                                        buf.extend_from_slice(&data[..room.min(data.len())]);
+                                    }
+                                    let _ = sink
+                                        .send(StreamEvent::Stdout {
+                                            data: String::from_utf8_lossy(&data).into_owned(),
+                                        })
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        let _ = out.read_to_end(&mut buf).await;
+                        if buf.len() > max_stdout {
+                            buf.truncate(max_stdout);
+                        }
+                    }
+                }
             }
             buf
         });
@@ -328,7 +366,7 @@ impl SandboxRunner {
         let _ = self.workspace_mgr.cleanup_job(&request.job_id);
 
         // 16. 构建结果
-        Ok(JobResult {
+        let result = JobResult {
             job_id: request.job_id,
             status,
             exit_code: exit_status.as_ref().and_then(|s| s.code()),
@@ -339,7 +377,12 @@ impl SandboxRunner {
             timed_out,
             sandbox_violations,
             resource_usage: None,
-        })
+        };
+        // cr-024: 流式模式末事件(Result),发完 sender drop → channel 关 → handler 流尾
+        if let Some(sink) = stdout_sink {
+            let _ = sink.send(StreamEvent::Result(result.clone())).await;
+        }
+        Ok(result)
     }
 
     /// 注册自定义 profile

@@ -456,7 +456,7 @@ async fn cancel_token_aborts_job_status_is_cancelled() {
     let mut req = make_request("cancel-001", &["/bin/sleep", "30"]);
     req.timeout = Some(Duration::from_secs(1));
 
-    let handle = tokio::spawn(async move { runner.run_job_with_cancel(req, cancel_clone).await });
+    let handle = tokio::spawn(async move { runner.run_job_with_cancel(req, cancel_clone, None).await });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     cancel.cancel();
