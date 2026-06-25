@@ -33,6 +33,7 @@ pub async fn create_test_app_with_concurrency(max: usize) -> (tempfile::TempDir,
     let state = AppState {
         scheduler,
         config_path: std::path::PathBuf::new(),
+        api_key: None,
     };
     (tmp, app(state))
 }
@@ -56,6 +57,7 @@ pub async fn create_test_app_with_profiles(
     let state = AppState {
         scheduler,
         config_path: std::path::PathBuf::new(),
+        api_key: None,
     };
     (tmp, app(state))
 }

@@ -211,6 +211,22 @@ fn profile_config_to_custom_values_override_defaults() {
     assert_eq!(profile.disk_quota_mb, Some(50));
 }
 
+// ==================== cr-023: server.api_key ====================
+
+#[test]
+fn server_section_api_key_defaults_none_and_parses() {
+    // 默认 = None(鉴权关)
+    let default = sandbox_server::config::ServerSection::default();
+    assert!(default.api_key.is_none());
+    // 显式配置
+    let yaml = "server:\n  api_key: \"secret-xyz\"\n";
+    let cfg: sandbox_server::config::AppConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(cfg.server.api_key.as_deref(), Some("secret-xyz"));
+    // 缺省段仍 None
+    let cfg2: sandbox_server::config::AppConfig = serde_yaml::from_str("server:\n").unwrap();
+    assert!(cfg2.server.api_key.is_none());
+}
+
 #[test]
 fn rlimit_unit_conversion_mb_to_bytes() {
     let rlimit_file = sandbox_server::config::RlimitFileConfig {

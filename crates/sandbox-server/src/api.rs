@@ -25,6 +25,8 @@ pub struct AppState {
     pub scheduler: Arc<Scheduler>,
     /// 配置文件路径，供 /api/v1/reload 重新加载
     pub config_path: PathBuf,
+    /// cr-023: Bearer API key(None = 鉴权关)
+    pub api_key: Option<String>,
 }
 
 /// 构建路由
@@ -431,6 +433,7 @@ mod tests {
         app(AppState {
             scheduler,
             config_path: std::path::PathBuf::new(),
+            api_key: None,
         })
     }
 
@@ -540,6 +543,7 @@ mod tests {
         app(AppState {
             scheduler,
             config_path: std::path::PathBuf::new(),
+            api_key: None,
         })
     }
 
@@ -603,6 +607,7 @@ profiles:
         let app = app(AppState {
             scheduler,
             config_path: config_path.clone(),
+            api_key: None,
         });
 
         let response = app
@@ -659,6 +664,7 @@ profiles:
         let app = app(AppState {
             scheduler,
             config_path: config_path.clone(),
+            api_key: None,
         });
 
         let response = app
@@ -766,6 +772,7 @@ profiles:
         let app = app(AppState {
             scheduler,
             config_path: std::path::PathBuf::new(),
+            api_key: None,
         });
 
         let body = serde_json::json!({

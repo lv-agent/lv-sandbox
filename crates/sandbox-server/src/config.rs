@@ -41,6 +41,9 @@ pub struct ServerSection {
     /// cr-021: 审计日志(默认关)
     #[serde(default)]
     pub audit: AuditConfig,
+    /// cr-023: Bearer API key。None/缺省 = 不鉴权(默认,零行为变化)。
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -64,6 +67,7 @@ impl Default for ServerSection {
             log_level: default_log_level(),
             log_format: default_log_format(),
             audit: AuditConfig::default(),
+            api_key: None,
         }
     }
 }

@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         scheduler: scheduler.clone(),
         config_path: std::path::PathBuf::from(&config_path),
+        api_key: config.server.api_key.clone(),
     };
     let app = sandbox_server::api::app(state);
 
