@@ -39,10 +39,11 @@ lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是
 docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
-  -v /safe/worker/sandboxes:/sandboxes:rw \
+  --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
   ghcr.io/lv-agent/lv-sandbox:v0.2.0
+# (生产环境:给 /sandboxes 用 host 卷并 chown 10000:10000,见 docs/zh/usage.md)
 ```
 
 **或源码构建**（需 libseccomp-dev / libseccomp2）：
@@ -64,31 +65,27 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 
 ## 看看效果
 
-三个任务——一个正常,两个 agent 可能误踩的"危险"操作:
+API 是**异步**的——`POST /jobs` 立即返回 `{"status":"Running"}`(意思是"已受理、后台运行中",**不是**"成功")。要轮询 `GET /jobs/{id}` 看结果:
 
 ```bash
-# 1) 正常命令 → 放行
+# 正常命令 → 放行
 curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"ok","argv":["/bin/echo","hello agent"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/ok
+# → {"status":"Completed","exit_code":0,"stdout":"hello agent\n",...}
 
-# 2) 想读宿主密钥 → Landlock 拒绝(什么都不泄)
+# 想读宿主密钥 → Landlock 拒绝(什么都不泄)
 curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
-
-# 3) 想"phone home" → seccomp 杀掉 socket
-curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
-  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/secret
+# → {"status":"Completed","exit_code":1,"stderr":"/bin/cat: /etc/passwd: Permission denied\n",...}
 ```
 
-轮询 `GET /api/v1/jobs/{id}` 看各自结果:
+正常命令照跑,越界的操作被兜住——**不靠一任务一容器、不要特权**。
 
-| job | 结果 | 原因 |
-|---|---|---|
-| `ok` | `Completed`,stdout `hello agent` | 正常命令,放行 |
-| `secret` | `Completed` 退出码 1,stderr `cat: /etc/passwd: Permission denied` | Landlock 把任务圈在工作区内,`/etc/passwd` 在圈外 |
-| `net` | `Killed` | seccomp 杀掉 `socket(AF_INET)`——任务根本建不出 TCP/UDP socket |
-
-30 秒看懂核心:**正常命令照跑,危险操作被兜住——不靠一任务一容器、不要特权、不会外联。**(要"受控出站"而非全断,见 [network-isolation.md](docs/zh/network-isolation.md)。)
+> **网络也封了**——seccomp 杀掉 `socket(AF_INET)`。slim 镜像里没有 `curl`/`python`
+> 没法直接演示;往镜像里装个运行时,或跑 `cargo test -p sandbox-e2e --test network_egress`
+> 看被杀的效果。要**受控白名单出站**见 [network-isolation.md](docs/zh/network-isolation.md)。
 
 ## 文档
 

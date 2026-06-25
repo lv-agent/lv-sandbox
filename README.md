@@ -77,10 +77,11 @@ a single worker — fast cold-start, low overhead, high throughput.
 docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
-  -v /safe/worker/sandboxes:/sandboxes:rw \
+  --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
   ghcr.io/lv-agent/lv-sandbox:v0.2.0
+# (production: use a host volume for /sandboxes and chown it 10000:10000 — see docs/usage.md)
 ```
 
 **Or build from source** (needs `libseccomp-dev` / `libseccomp2`):
@@ -102,31 +103,31 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 
 ## See it work
 
-Three jobs — one normal, two "dangerous" ones an agent might fumble into:
+The API is **async** — `POST /jobs` returns `{"status":"Running"}` immediately (it means
+"accepted, running in the background", **not** "succeeded"). Poll `GET /jobs/{id}` for the
+outcome:
 
 ```bash
-# 1) Normal command → works
+# normal command — works
 curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"ok","argv":["/bin/echo","hello agent"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/ok
+# → {"status":"Completed","exit_code":0,"stdout":"hello agent\n",...}
 
-# 2) Try to read a host secret → Landlock denies (nothing leaks)
+# try to read a host secret — Landlock denies (nothing leaks)
 curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
   -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
-
-# 3) Try to "phone home" → seccomp kills the socket
-curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
-  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+curl -s localhost:8080/api/v1/jobs/secret
+# → {"status":"Completed","exit_code":1,"stderr":"/bin/cat: /etc/passwd: Permission denied\n",...}
 ```
 
-Poll `GET /api/v1/jobs/{id}` for each:
+Normal commands run; a task that reaches outside its workspace is contained — **no container
+per task, no privileges.**
 
-| job | result | why |
-|---|---|---|
-| `ok` | `Completed`, stdout `hello agent` | normal command — allowed |
-| `secret` | `Completed` exit 1, stderr `cat: /etc/passwd: Permission denied` | Landlock confines the task to its workspace — `/etc/passwd` is outside |
-| `net` | `Killed` | seccomp kills `socket(AF_INET)` — the task can't create a TCP/UDP socket at all |
-
-That's the whole pitch in 30 seconds: **legit commands run, dangerous ones are contained — no container per task, no privileges, no phoning home.** (For *controlled* egress instead of total block, see [network-isolation.md](docs/network-isolation.md).)
+> **Network is blocked too** — seccomp kills `socket(AF_INET)`. The slim image ships no
+> `curl`/`python` to show it inline; install a runtime into the image, or run
+> `cargo test -p sandbox-e2e --test network_egress` to see the kill. For *controlled*,
+> allowlisted egress see [network-isolation.md](docs/network-isolation.md).
 
 ## Documentation
 

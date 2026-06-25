@@ -15,7 +15,7 @@ Claude Code  ──stdio JSON-RPC──▶  sandbox-mcp(网关)  ──HTTP─�
 ```bash
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
-  -v /safe/worker/sandboxes:/sandboxes:rw \
+  --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
   ghcr.io/lv-agent/lv-sandbox:v0.2.0
