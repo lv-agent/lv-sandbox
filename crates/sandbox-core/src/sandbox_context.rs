@@ -10,10 +10,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::capability::CapabilityReport;
 use crate::env::build_sanitized_env;
 use crate::error::CoreError;
-use crate::job::{JobRequest, JobResult, JobStatus};
+use crate::job::{JobRequest, JobResult, JobStatus, SandboxViolation};
 use crate::process::PreparedSandboxContext;
 use crate::profile::{ProfileRegistry, SandboxProfile};
 use crate::workspace::WorkspaceManager;
+
+/// cr-022: 磁盘配额看门狗轮询间隔。两次轮询间的突发写最多超出 interval × 写速,
+/// 由 rlimit fsize(单文件封顶)收窄该窗口。
+const DISK_QUOTA_POLL: Duration = Duration::from_millis(250);
 
 /// 沙箱运行器配置
 #[derive(Debug, Clone)]
@@ -227,17 +231,43 @@ impl SandboxRunner {
             buf
         });
 
-        // 12. 等待子进程退出（超时 或 cancel，cr-018）
-        let (timed_out, cancelled, exit_status) = tokio::select! {
+        // 12. 等待子进程退出（超时 / cancel / cr-022 磁盘配额超限）
+        let quota_bytes = profile.disk_quota_mb.map(|mb| mb * 1024 * 1024);
+
+        // cr-022: 配额看门狗。disk_quota_mb 为 None 时 pending 永不触发(零开销、零行为变化)。
+        // 有值时每 DISK_QUOTA_POLL 测一次工作区聚合大小(spawn_blocking,不阻塞 executor),
+        // 超限即返回,触发 select! 的收割分支。
+        let quota_watch = async {
+            let quota = match quota_bytes {
+                Some(q) => q,
+                None => {
+                    std::future::pending::<()>().await;
+                    return;
+                }
+            };
+            let mut interval = tokio::time::interval(DISK_QUOTA_POLL);
+            loop {
+                interval.tick().await;
+                let dir = self.workspace_mgr.base_dir().join(&request.job_id);
+                let size = tokio::task::spawn_blocking(move || crate::workspace::dir_size(&dir))
+                    .await
+                    .unwrap_or(0);
+                if size > quota {
+                    return;
+                }
+            }
+        };
+
+        let (timed_out, cancelled, disk_quota_exceeded, exit_status) = tokio::select! {
             r = tokio::time::timeout(timeout, child.wait()) => match r {
-                Ok(Ok(status)) => (false, false, Some(status)),
+                Ok(Ok(status)) => (false, false, false, Some(status)),
                 Ok(Err(e)) => return Err(CoreError::Process(e.to_string())),
                 Err(_) => {
                     // 超时：SIGTERM → 500ms → SIGKILL
                     unsafe { libc::killpg(child_pid, libc::SIGTERM); }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     let _ = child.kill().await;
-                    (true, false, child.wait().await.ok())
+                    (true, false, false, child.wait().await.ok())
                 }
             },
             _ = cancel.cancelled() => {
@@ -245,7 +275,14 @@ impl SandboxRunner {
                 unsafe { libc::killpg(child_pid, libc::SIGTERM); }
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let _ = child.kill().await;
-                (false, true, child.wait().await.ok())
+                (false, true, false, child.wait().await.ok())
+            }
+            // cr-022: 配额超限 → SIGTERM → 500ms → SIGKILL（整组，无孤儿）
+            _ = quota_watch => {
+                unsafe { libc::killpg(child_pid, libc::SIGTERM); }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = child.kill().await;
+                (false, false, true, child.wait().await.ok())
             }
         };
 
@@ -258,16 +295,26 @@ impl SandboxRunner {
         // 14. 确定状态
         // - cancel → Cancelled（cr-018，用户主动）
         // - 超时 → TimedOut
+        // - cr-022 磁盘配额超限 → DiskQuotaExceeded
         // - 被信号杀死（如 seccomp SIGSYS 违规、外部信号）→ Killed
         // - 正常退出（含非零退出码）→ Completed
         let status = if cancelled {
             JobStatus::Cancelled
         } else if timed_out {
             JobStatus::TimedOut
+        } else if disk_quota_exceeded {
+            JobStatus::DiskQuotaExceeded
         } else if exit_status.as_ref().and_then(|s| s.signal()).is_some() {
             JobStatus::Killed
         } else {
             JobStatus::Completed
+        };
+
+        // cr-022: 配额超限标注原因（启用预埋的 FileSizeExceeded 钩子）
+        let sandbox_violations = if disk_quota_exceeded {
+            vec![SandboxViolation::FileSizeExceeded]
+        } else {
+            vec![]
         };
 
         // 15. 清理 cgroup + workspace
@@ -290,7 +337,7 @@ impl SandboxRunner {
             stderr,
             duration,
             timed_out,
-            sandbox_violations: vec![],
+            sandbox_violations,
             resource_usage: None,
         })
     }

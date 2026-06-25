@@ -146,8 +146,8 @@ impl WorkspaceManager {
     }
 }
 
-/// 递归计算目录总大小
-fn dir_size(path: &Path) -> u64 {
+/// 递归计算目录总大小(cr-022: 看门狗测量用,故 pub)
+pub fn dir_size(path: &Path) -> u64 {
     let mut total: u64 = 0;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
