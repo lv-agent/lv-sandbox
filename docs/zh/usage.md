@@ -227,6 +227,9 @@ server:
   max_concurrent_jobs: 100      # 最大并发任务数
   log_level: "info"
   log_format: "json"            # json | text
+  audit:                        # cr-021: 审计日志(默认关)
+    enabled: false
+    path: "/var/log/sandbox/audit.jsonl"
 
 sandbox:
   base_dir: "/sandboxes"        # 任务工作空间根目录
@@ -264,6 +267,12 @@ profiles:
 ```
 
 修改配置后调用 `POST /api/v1/reload` 热重载，无需重启服务。
+
+#### 审计日志
+
+设 `server.audit.enabled: true` 开启 JSONL 审计轨迹(默认关)。每行自包含一个事件:
+started / completed / timed_out / killed / cancelled / failed,带 argv、exit_code、
+signal、duration_ms。审计文件在运维侧(不返 agent);按"可能含命令的日志"加以访问控制。
 
 ### 超时格式
 

@@ -100,6 +100,7 @@ seccomp-based, not netns-based).
 
 - **No built-in auth** on the HTTP API — place the server behind your own
   auth/network boundary in production.
-- **Completed jobs are evicted** from the in-memory table; this is not a durable
-  audit log. If you need forensics, capture results/`/metrics` externally.
+- **Completed jobs are evicted** from the in-memory table. For a durable record,
+  enable `server.audit` (a JSONL audit trail of every job's command + outcome);
+  otherwise capture results/`/metrics` externally.
 - **Host kernel ≥ 5.13** is required for Landlock.

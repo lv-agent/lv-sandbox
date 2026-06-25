@@ -72,5 +72,5 @@ docker run -d --name sandbox \
 ## 运维注意
 
 - HTTP API **无内置鉴权**——生产环境请自行在 server 前加鉴权/网络边界。
-- **完成的 job 会被淘汰**出内存表;这不是持久审计日志。需要取证请外部捕获结果/`/metrics`。
+- **完成的 job 会被淘汰**出内存表。要持久记录,开启 `server.audit`(JSONL 审计轨迹,记录每个 job 的命令与结果);否则外部捕获结果/`/metrics`。
 - 宿主内核 **≥ 5.13**(Landlock 所需)。

@@ -251,6 +251,9 @@ server:
   max_concurrent_jobs: 100      # max concurrent tasks
   log_level: "info"
   log_format: "json"            # json | text
+  audit:                        # cr-021: opt-in audit log (off by default)
+    enabled: false
+    path: "/var/log/sandbox/audit.jsonl"
 
 sandbox:
   base_dir: "/sandboxes"        # task workspace root
@@ -288,6 +291,14 @@ profiles:
 ```
 
 After editing, call `POST /api/v1/reload` to hot-reload — no restart needed.
+
+#### Audit log
+
+Set `server.audit.enabled: true` to write a JSONL audit trail (off by default).
+Each line is a self-contained event: `started` / `completed` / `timed_out` /
+`killed` / `cancelled` / `failed`, with `argv`, `exit_code`, `signal`, `duration_ms`.
+The file is operator-side (not returned to agents); protect it like any log that
+may contain commands.
 
 ### Timeout format
 
