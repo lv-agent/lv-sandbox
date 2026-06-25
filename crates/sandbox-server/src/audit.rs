@@ -71,6 +71,8 @@ pub fn status_to_event_type(status: &JobStatus) -> AuditEventType {
         JobStatus::TimedOut => AuditEventType::JobTimedOut,
         JobStatus::Killed => AuditEventType::JobKilled,
         JobStatus::Cancelled => AuditEventType::JobCancelled,
+        // cr-022: 复用 JobKilled 事件类型(不膨胀);detail 写明 disk quota。
+        JobStatus::DiskQuotaExceeded => AuditEventType::JobKilled,
         JobStatus::Error(_) | JobStatus::SandboxInitFailed(_) => AuditEventType::JobFailed,
     }
 }
@@ -79,6 +81,8 @@ pub fn status_to_event_type(status: &JobStatus) -> AuditEventType {
 pub fn status_detail(status: &JobStatus) -> Option<String> {
     match status {
         JobStatus::Error(m) | JobStatus::SandboxInitFailed(m) => Some(m.clone()),
+        // cr-022
+        JobStatus::DiskQuotaExceeded => Some("disk quota exceeded".to_string()),
         _ => None,
     }
 }

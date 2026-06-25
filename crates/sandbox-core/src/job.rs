@@ -20,6 +20,8 @@ pub enum JobStatus {
     Killed,
     /// cr-018: 被取消（用户主动 POST /jobs/{id}/cancel）
     Cancelled,
+    /// cr-022: 工作区聚合写入超 disk_quota_mb，被看门狗收割
+    DiskQuotaExceeded,
     SandboxInitFailed(String),
     Error(String),
 }
