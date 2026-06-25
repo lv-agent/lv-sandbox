@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,8 @@ pub struct AppState {
 
 /// 构建路由
 pub fn app(state: AppState) -> Router {
+    // cr-023: 全量挂鉴权中间件(api_key 作为中间件独立 state 传入);/health 在中间件内按路径放行。
+    let api_key = state.api_key.clone();
     Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
@@ -40,7 +43,52 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/reload", post(reload))
+        .layer(middleware::from_fn_with_state(api_key, require_api_key))
         .with_state(Arc::new(state))
+}
+
+/// cr-023: 常量时间字节比较(防时序侧信道)。长度不同直接返回 false。
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// cr-023: Bearer API key 鉴权中间件(state = api_key: Option<String>)。
+/// - /health 放行(探活);
+/// - api_key 为 None 时透传(鉴权关);
+/// - 否则校验 `Authorization: Bearer <key>`(常量时间比较),不匹配 → 401。
+async fn require_api_key(
+    State(api_key): State<Option<String>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    // /health 放行
+    if req.uri().path() == "/health" {
+        return next.run(req).await;
+    }
+    let Some(expected) = api_key.as_deref() else {
+        return next.run(req).await;
+    };
+    let authed = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|tok| ct_eq(tok.as_bytes(), expected.as_bytes()))
+        .unwrap_or(false);
+    if authed {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "unauthorized".into(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 // ==================== Handlers ====================
@@ -435,6 +483,121 @@ mod tests {
             config_path: std::path::PathBuf::new(),
             api_key: None,
         })
+    }
+
+    /// cr-023: 带可选 api_key 的测试 app。
+    async fn make_app_with_key(tmp: &std::path::Path, key: Option<&str>) -> Router {
+        let config = SandboxConfig {
+            sandbox_base_dir: tmp.to_path_buf(),
+            disk_watermark_bytes: 0,
+        };
+        let runner = Arc::new(SandboxRunner::new(&config).await.unwrap());
+        let scheduler = Arc::new(Scheduler::new(runner, 10));
+        app(AppState {
+            scheduler,
+            config_path: std::path::PathBuf::new(),
+            api_key: key.map(String::from),
+        })
+    }
+
+    // ==================== cr-023: 鉴权 ====================
+
+    #[tokio::test]
+    async fn auth_off_all_routes_accessible() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), None).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/profiles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_on_missing_header_returns_401() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), Some("secret")).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/profiles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_on_wrong_key_returns_401() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), Some("secret")).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/profiles")
+                    .header("authorization", "Bearer wrong")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_on_correct_key_returns_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), Some("secret")).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/profiles")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_on_health_open_without_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), Some("secret")).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_on_metrics_protected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app_with_key(tmp.path(), Some("secret")).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
