@@ -1,4 +1,4 @@
-//! MCP 工具的参数/返回值类型。
+//! MCP tool parameter / return types.
 
 use std::collections::HashMap;
 
@@ -9,33 +9,33 @@ fn default_profile() -> String {
     "shell".to_string()
 }
 
-/// `sandbox_run` 工具入参
+/// `sandbox_run` tool parameters.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SandboxRunParams {
-    /// 命令及参数，如 ["/bin/python3", "-c", "print(42)"]
+    /// Command and arguments, e.g. ["/bin/python3", "-c", "print(42)"]
     pub argv: Vec<String>,
-    /// 安全 profile：shell / python / node / 自定义
+    /// Security profile: shell / python / node / custom
     #[serde(default = "default_profile")]
     pub profile: String,
-    /// 超时，如 "30s"、"5m"。空则用 profile 默认值
+    /// Timeout, e.g. "30s", "5m". Empty uses the profile default.
     pub timeout: Option<String>,
-    /// 子进程环境变量
+    /// Child process environment variables.
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// 传递给子进程的 stdin（UTF-8 文本）
+    /// stdin (UTF-8 text) piped to the child process.
     pub stdin: Option<String>,
-    /// 唯一 job 标识。空则自动生成 UUID
+    /// Unique job id. Empty auto-generates a UUID.
     pub job_id: Option<String>,
 }
 
-/// `sandbox_reload` 工具入参
+/// `sandbox_reload` tool parameters.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SandboxReloadParams {
-    /// 配置文件路径。空则重新加载当前配置
+    /// Config file path. Empty reloads the current config.
     pub config_path: Option<String>,
 }
 
-/// job 执行结果（对应 sandbox-server 的 SubmitResponse）
+/// Job result (mirrors sandbox-server's SubmitResponse).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobResultInfo {
     pub job_id: String,
@@ -48,7 +48,7 @@ pub struct JobResultInfo {
     pub timed_out: bool,
 }
 
-/// worker 状态（对应 sandbox-server 的 StatusResponse）
+/// Worker status (mirrors sandbox-server's StatusResponse).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusInfo {
     pub running_jobs: usize,
@@ -56,13 +56,13 @@ pub struct StatusInfo {
     pub uptime_secs: u64,
 }
 
-/// profile 列表（对应 sandbox-server 的 ProfilesResponse）
+/// Profile list (mirrors sandbox-server's ProfilesResponse).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProfilesInfo {
     pub profiles: Vec<String>,
 }
 
-/// reload 结果（对应 sandbox-server 的 ReloadResponse）
+/// Reload result (mirrors sandbox-server's ReloadResponse).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReloadInfo {
     pub success: bool,
