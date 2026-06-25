@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 容器内端到端验证：启动镜像 → health → profiles → submit echo 任务断言 Completed
+# 容器内端到端验证：启动镜像 → health → profiles → submit echo/python/node 任务断言
 #
 # 用法:
 #   bash scripts/verify-image.sh [IMAGE]
@@ -70,6 +70,28 @@ done
 echo "   $resp"
 echo "$resp" | grep -q '"exit_code":0'       || { echo "✗ exit_code not 0"; exit 1; }
 echo "$resp" | grep -q 'hello sandbox'       || { echo "✗ stdout missing expected output"; exit 1; }
+
+echo "==> /api/v1/jobs (python: import requests/httpx)"
+curl -s -X POST "http://127.0.0.1:$HOST_PORT/api/v1/jobs" \
+    -H 'content-type: application/json' \
+    -d '{"job_id":"verify-py","argv":["/usr/bin/python3","-c","import requests,httpx;print(\"py-ok\")"],"profile_name":"python","timeout":"15s","custom_env":{}}' >/dev/null
+for i in $(seq 1 50); do
+    resp=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/jobs/verify-py")
+    echo "$resp" | grep -qE '"status":"(Completed|Error|Killed)"' && break
+    sleep 0.2
+done
+echo "$resp" | grep -q 'py-ok' || { echo "✗ python did not run (import requests/httpx): $resp"; exit 1; }
+
+echo "==> /api/v1/jobs (node)"
+curl -s -X POST "http://127.0.0.1:$HOST_PORT/api/v1/jobs" \
+    -H 'content-type: application/json' \
+    -d '{"job_id":"verify-node","argv":["/usr/bin/node","-e","console.log(\"node-ok\")"],"profile_name":"node","timeout":"15s","custom_env":{}}' >/dev/null
+for i in $(seq 1 50); do
+    resp=$(curl -s "http://127.0.0.1:$HOST_PORT/api/v1/jobs/verify-node")
+    echo "$resp" | grep -qE '"status":"(Completed|Error|Killed)"' && break
+    sleep 0.2
+done
+echo "$resp" | grep -q 'node-ok' || { echo "✗ node did not run: $resp"; exit 1; }
 
 echo ""
 echo "✅ in-container end-to-end verification passed: $IMAGE"

@@ -25,6 +25,7 @@ lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是
 - **默认零出站，白名单受控出站可选**：seccomp 把 `socket()` 限制为仅 `AF_UNIX`，任务建不出任何 TCP/UDP socket；profile 可按白名单经 UDS SOCKS5 代理开启受控出站。零特权——见[网络隔离](docs/zh/network-isolation.md)
 - **并发执行**：一个 worker 同时跑上百个轻量任务，`Semaphore` 限流排队
 - **YAML 配置**：内置 `shell`/`python`/`node` profile，可自定义，支持热重载
+- **内置运行时**：镜像含 `python3`（+`requests`/`httpx`）与 `node`，`python`/`node` profile 开箱即用
 - **异步任务 + 取消**：提交立即返回，轮询取结果，可取消运行中任务（SIGTERM → SIGKILL）
 - **HTTP API**：提交/查询/取消、列 profile、重载配置、Prometheus 指标
 - **输出脱敏与就绪**：`stdout`/`stderr` 返回前清洗密钥；`/health` 报告安全机制生效状态

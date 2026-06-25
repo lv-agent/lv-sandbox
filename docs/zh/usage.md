@@ -171,6 +171,10 @@ profiles:
 | `python` | Python 脚本 | 256 MB | 5s |
 | `node` | Node.js 脚本 | 256 MB | 5s |
 
+> Docker 镜像内置 `python3`（含 `requests`/`httpx`）与 `node`,故 `python`/`node`
+> profile 开箱即用。装额外包需配出站白名单(见[受控出站](#受控出站egress-allowlist))——
+> 装到任务工作区。
+
 自定义 profile 通过配置文件添加（见 [配置参考](#配置参考)）。
 
 ---

@@ -61,6 +61,8 @@ a single worker — fast cold-start, low overhead, high throughput.
   by a `Semaphore`
 - **YAML profiles** — built-in `shell` / `python` / `node`, fully customisable,
   hot-reloadable
+- **Runtimes included** — the image ships `python3` (+ `requests` / `httpx`) and
+  `node`, so the `python` / `node` profiles work out of the box
 - **Async jobs + cancel** — submit returns immediately; poll for results; cancel
   running tasks (SIGTERM → SIGKILL)
 - **HTTP API** — submit, status, cancel, list profiles, reload, Prometheus metrics

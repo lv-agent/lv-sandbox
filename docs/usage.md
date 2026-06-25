@@ -190,6 +190,11 @@ Three built-in profiles, chosen per task at submit time:
 | `python` | Python scripts | 256 MB | 5s |
 | `node` | Node.js scripts | 256 MB | 5s |
 
+> The Docker image bundles `python3` (with `requests` / `httpx`) and `node`, so the
+> `python` / `node` profiles run out of the box. Installing extra packages needs an
+> egress allowlist (see [Controlled egress](#controlled-egress-egress-allowlist)) —
+> install into the task workspace.
+
 Custom profiles are added via the config file (see [Config reference](#config-reference)).
 
 ---

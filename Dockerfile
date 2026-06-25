@@ -1,6 +1,6 @@
 # lv-sandbox 多阶段构建
 #   builder: rust:1-bookworm + libseccomp-dev 编译
-#   runtime: debian:bookworm-slim + libseccomp2 + curl（非 root；curl 供 demo/排查用）
+#   runtime: debian:bookworm-slim + libseccomp2 + curl + python3/node（非 root；运行时供 agent 任务用）
 # 构建命令: docker build -t lv-sandbox:0.2.1 .
 
 # ---- builder：编译阶段（需要 libseccomp-dev 头文件 + pkg-config）----
@@ -16,10 +16,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p sandbox-server -p sandbox-mcp && \
     cp /app/target/release/sandbox-server /app/target/release/sandbox-mcp /usr/local/bin/
 
-# ---- runtime：运行阶段（仅需 libseccomp2 运行时）----
+# ---- runtime：运行阶段（libseccomp2 + curl + python3/node 运行时）----
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends libseccomp2 ca-certificates curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libseccomp2 ca-certificates curl python3 python3-pip nodejs npm \
  && rm -rf /var/lib/apt/lists/*
+# cr-020: 预装常用 python 库到 /usr/lib/python3/dist-packages
+# （该路径在 landlock 的 /usr/lib/python3 白名单内,且在 debian python sys.path 上,无需改 landlock）
+RUN python3 -m pip install --break-system-packages --target /usr/lib/python3/dist-packages --no-cache-dir requests httpx
 # 非 root 用户（uid 10000），与 docs/architecture.md 推荐部署对齐
 RUN groupadd --gid 10000 sandbox && \
     useradd --uid 10000 --gid 10000 --create-home --shell /usr/sbin/nologin sandbox
