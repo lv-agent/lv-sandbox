@@ -100,6 +100,34 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 ```
 
+## See it work
+
+Three jobs — one normal, two "dangerous" ones an agent might fumble into:
+
+```bash
+# 1) Normal command → works
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"ok","argv":["/bin/echo","hello agent"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+
+# 2) Try to read a host secret → Landlock denies (nothing leaks)
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+
+# 3) Try to "phone home" → seccomp kills the socket
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+```
+
+Poll `GET /api/v1/jobs/{id}` for each:
+
+| job | result | why |
+|---|---|---|
+| `ok` | `Completed`, stdout `hello agent` | normal command — allowed |
+| `secret` | `Completed` exit 1, stderr `cat: /etc/passwd: Permission denied` | Landlock confines the task to its workspace — `/etc/passwd` is outside |
+| `net` | `Killed` | seccomp kills `socket(AF_INET)` — the task can't create a TCP/UDP socket at all |
+
+That's the whole pitch in 30 seconds: **legit commands run, dangerous ones are contained — no container per task, no privileges, no phoning home.** (For *controlled* egress instead of total block, see [network-isolation.md](docs/network-isolation.md).)
+
 ## Documentation
 
 - 📐 [Architecture](docs/architecture.md) — the design bet, layers, security boundary
@@ -107,7 +135,9 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 - 🔌 [HTTP API reference](docs/api.md) — endpoints, schemas, status codes
 - 🛡️ [Security model](docs/security.md) — threat boundary & deployment hardening
 - 🌐 [Network isolation](docs/network-isolation.md) — egress model deep-dive
-- 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md) · [API](docs/zh/api.md) · [安全](docs/zh/security.md) · [网络隔离](docs/zh/network-isolation.md)
+- ⚖️ [How it compares](docs/comparison.md) — vs Docker / gVisor / Kata / microVM, by threat model
+- 🤖 [Claude Code walkthrough](docs/integrations/claude-code.md) — run agent commands in the sandbox, end-to-end
+- 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md) · [API](docs/zh/api.md) · [安全](docs/zh/security.md) · [网络隔离](docs/zh/network-isolation.md) · [对比](docs/zh/comparison.md) · [Claude Code](docs/zh/integrations/claude-code.md)
 
 ## Requirements
 

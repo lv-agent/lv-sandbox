@@ -62,6 +62,34 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 ```
 
+## 看看效果
+
+三个任务——一个正常,两个 agent 可能误踩的"危险"操作:
+
+```bash
+# 1) 正常命令 → 放行
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"ok","argv":["/bin/echo","hello agent"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+
+# 2) 想读宿主密钥 → Landlock 拒绝(什么都不泄)
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"secret","argv":["/bin/cat","/etc/passwd"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+
+# 3) 想"phone home" → seccomp 杀掉 socket
+curl -X POST localhost:8080/api/v1/jobs -H 'content-type: application/json' \
+  -d '{"job_id":"net","argv":["/usr/bin/curl","-s","http://example.com"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+```
+
+轮询 `GET /api/v1/jobs/{id}` 看各自结果:
+
+| job | 结果 | 原因 |
+|---|---|---|
+| `ok` | `Completed`,stdout `hello agent` | 正常命令,放行 |
+| `secret` | `Completed` 退出码 1,stderr `cat: /etc/passwd: Permission denied` | Landlock 把任务圈在工作区内,`/etc/passwd` 在圈外 |
+| `net` | `Killed` | seccomp 杀掉 `socket(AF_INET)`——任务根本建不出 TCP/UDP socket |
+
+30 秒看懂核心:**正常命令照跑,危险操作被兜住——不靠一任务一容器、不要特权、不会外联。**(要"受控出站"而非全断,见 [network-isolation.md](docs/zh/network-isolation.md)。)
+
 ## 文档
 
 - 📐 [架构设计思路](docs/zh/architecture.md) — 为什么这样设计、高层架构、安全边界
@@ -69,7 +97,9 @@ curl http://127.0.0.1:8080/api/v1/jobs/demo-1
 - 🔌 [HTTP API 参考](docs/zh/api.md) — 端点、schema、状态码
 - 🛡️ [安全模型](docs/zh/security.md) — 威胁边界与部署加固
 - 🌐 [网络隔离](docs/zh/network-isolation.md) — 出站模型深度
-- 🇬🇧 English docs: [README](README.md) · [Architecture](docs/architecture.md) · [Usage](docs/usage.md) · [API](docs/api.md) · [Security](docs/security.md) · [Network](docs/network-isolation.md)
+- ⚖️ [方案对比](docs/zh/comparison.md) — 对照 Docker/gVisor/Kata/microVM,按威胁模型选型
+- 🤖 [Claude Code 走查](docs/zh/integrations/claude-code.md) — 5 分钟把 agent 命令接进沙箱
+- 🇬🇧 English docs: [README](README.md) · [Architecture](docs/architecture.md) · [Usage](docs/usage.md) · [API](docs/api.md) · [Security](docs/security.md) · [Network](docs/network-isolation.md) · [Comparison](docs/comparison.md) · [Claude Code](docs/integrations/claude-code.md)
 
 ## License
 
