@@ -57,6 +57,8 @@ pub struct Scheduler {
     start_time: Instant,
     /// cr-018: job 运行时表（job_id → entry）
     jobs: Arc<RwLock<HashMap<String, JobEntry>>>,
+    /// cr-021: 审计日志(默认 noop)
+    audit: Arc<crate::audit::AuditLogger>,
 }
 
 impl Scheduler {
@@ -67,7 +69,14 @@ impl Scheduler {
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             start_time: Instant::now(),
             jobs: Arc::new(RwLock::new(HashMap::new())),
+            audit: Arc::new(crate::audit::AuditLogger::noop()),
         }
+    }
+
+    /// cr-021: 注入审计 logger(builder,main 用)。
+    pub fn with_audit(mut self, logger: crate::audit::AuditLogger) -> Self {
+        self.audit = Arc::new(logger);
+        self
     }
 
     /// 提交 job。
@@ -124,6 +133,8 @@ impl Scheduler {
     /// cr-018: 异步提交。注册 job 表项 + 后台执行。立即返回 job_id。
     pub async fn submit_async(&self, request: JobRequest) -> String {
         let job_id = request.job_id.clone();
+        let profile = request.profile_name.clone();
+        let argv = request.argv.clone();
         let cancel = CancellationToken::new();
         self.jobs.write().expect("jobs lock poisoned").insert(
             job_id.clone(),
@@ -134,12 +145,25 @@ impl Scheduler {
             },
         );
 
+        // cr-021: 审计 Started(提交即记)
+        self.audit.log(crate::audit::AuditEvent::new(
+            crate::audit::AuditEventType::JobStarted,
+            &job_id,
+            &profile,
+            argv.clone(),
+            None,
+            None,
+            None,
+            None,
+        ));
+
         // cr-018: 后台执行（runner 快照 + 共享 jobs 表 + semaphore）
         let runner = {
             self.runner.read().expect("runner lock poisoned").clone()
         };
         let semaphore = self.semaphore.clone();
         let jobs = self.jobs.clone();
+        let audit = self.audit.clone();
         let jid = job_id.clone();
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
@@ -170,6 +194,19 @@ impl Scheduler {
                 sandbox_violations: vec![],
                 resource_usage: None,
             });
+
+            // cr-021: 审计终态
+            audit.log(crate::audit::AuditEvent::new(
+                crate::audit::status_to_event_type(&result.status),
+                &jid,
+                &profile,
+                argv.clone(),
+                result.exit_code,
+                result.signal,
+                Some(result.duration.as_millis() as u64),
+                crate::audit::status_detail(&result.status),
+            ));
+
             if let Some(entry) = jobs.write().expect("jobs lock poisoned").get_mut(&jid) {
                 entry.state = JobState::Done(result);
             }
@@ -412,6 +449,43 @@ mod tests {
             ),
             "after cancel should be Done(Cancelled), actual: {:?}",
             state
+        );
+    }
+
+    /// cr-021: 接线后,file logger 记录 Started + Completed 两条 JSONL。
+    #[tokio::test]
+    async fn audit_records_started_and_completed_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let audit_path = tmp.path().join("audit.jsonl");
+        let logger = crate::audit::AuditLogger::file(&audit_path).unwrap();
+
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10).with_audit(logger);
+
+        scheduler
+            .submit_async(make_async_request("audit-001", &["/bin/echo", "hello"]))
+            .await;
+        let state = wait_until_done(&scheduler, "audit-001").await;
+        assert!(matches!(state, Some(JobState::Done(_))));
+
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        let events: Vec<serde_json::Value> = content
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(events.len(), 2, "should have Started + Completed: {content}");
+        assert_eq!(events[0]["event_type"], "JobStarted");
+        assert_eq!(events[1]["event_type"], "JobCompleted");
+        assert_eq!(events[1]["job_id"], "audit-001");
+        assert!(
+            events[1]["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "hello"),
+            "argv should contain hello: {content}"
         );
     }
 }

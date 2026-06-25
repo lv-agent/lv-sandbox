@@ -83,8 +83,21 @@ async fn main() -> anyhow::Result<()> {
     }
     let runner = Arc::new(runner);
 
-    // 4. 初始化 Scheduler
-    let scheduler = Arc::new(Scheduler::new(runner, config.server.max_concurrent_jobs));
+    // 4. 初始化 Scheduler（cr-021: 按配置注入审计 logger）
+    let audit = if config.server.audit.enabled {
+        match sandbox_server::audit::AuditLogger::file(std::path::Path::new(&config.server.audit.path)) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "audit logger init failed, using noop");
+                sandbox_server::audit::AuditLogger::noop()
+            }
+        }
+    } else {
+        sandbox_server::audit::AuditLogger::noop()
+    };
+    let scheduler = Arc::new(
+        Scheduler::new(runner, config.server.max_concurrent_jobs).with_audit(audit),
+    );
 
     // 5. 构建 HTTP 路由
     let state = AppState {
