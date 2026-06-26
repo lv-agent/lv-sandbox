@@ -82,12 +82,9 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => tracing::warn!(profile = %name, error = %e, "invalid profile config, skipping"),
         }
     }
-    // cr-026: 启动崩溃恢复——清孤儿一次性 job 目录 + 孤儿会话目录
+    // 启动崩溃恢复——清孤儿一次性 job 目录(会话改为启动重建,见下方 rebuild_from_disk)
     if let Err(e) = sandbox_core::recovery::recover(&runner) {
         tracing::warn!(error = %e, "job recovery scan failed");
-    }
-    if let Err(e) = sandbox_core::recovery::recover_sessions(&runner) {
-        tracing::warn!(error = %e, "session recovery scan failed");
     }
 
     let runner = Arc::new(runner);
@@ -108,6 +105,10 @@ async fn main() -> anyhow::Result<()> {
         Scheduler::new(runner.clone(), config.server.max_concurrent_jobs).with_audit(audit.clone()),
     );
     let sessions = Arc::new(SessionManager::new(runner, audit));
+    // cr-029: 会话跨重启重连——从盘重建注册表(替代 cr-026 的清理)
+    if let Err(e) = sessions.rebuild_from_disk() {
+        tracing::warn!(error = %e, "session rebuild failed");
+    }
 
     // 5. 构建 HTTP 路由
     let state = AppState {
