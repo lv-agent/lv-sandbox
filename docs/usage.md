@@ -280,6 +280,53 @@ overridden.
 
 ---
 
+## Sessions (persistent sandboxes)
+
+A **session** is a long-lived sandbox: a persistent workspace + a bound profile
+that survives across multiple `exec` calls. Use it for multi-step agent
+workflows (upload a file → run it → read results → iterate) without re-bundling
+everything into one command. One-shot `POST /jobs` remains for single commands.
+
+```bash
+# 1. create
+SID=$(curl -s -X POST http://127.0.0.1:8080/api/v1/sessions \
+  -H 'content-type: application/json' -d '{"profile_name":"shell"}' | jq -r .session_id)
+
+# 2. upload a script (raw bytes)
+curl -X PUT "http://127.0.0.1:8080/api/v1/sessions/$SID/files/run.sh" --data-binary @run.sh
+
+# 3. exec (shares the workspace with step 2). Add ?stream=true for live SSE stdout.
+curl -X POST "http://127.0.0.1:8080/api/v1/sessions/$SID/exec" \
+  -H 'content-type: application/json' -d '{"argv":["/bin/sh","run.sh"]}'
+
+# 4. list / download / destroy
+curl "http://127.0.0.1:8080/api/v1/sessions/$SID/files"            # list
+curl "http://127.0.0.1:8080/api/v1/sessions/$SID/files/out.txt"    # download
+curl -X DELETE "http://127.0.0.1:8080/api/v1/sessions/$SID"
+```
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/sessions` | create (`{profile_name, env?}`) → `{session_id}` |
+| `GET` | `/sessions` | list |
+| `GET` | `/sessions/{id}` | status |
+| `DELETE` | `/sessions/{id}` | destroy |
+| `POST` | `/sessions/{id}/exec` | run a command (`?stream=true` for SSE) |
+| `PUT` | `/sessions/{id}/files/{path}` | upload (raw bytes) |
+| `GET` | `/sessions/{id}/files/{path}` | download |
+| `GET` | `/sessions/{id}/files?path=` | list |
+| `DELETE` | `/sessions/{id}/files/{path}` | delete |
+
+Notes:
+
+- The profile is **bound at create**; all execs in the session use it.
+- Execs in a session are **serialized** (one at a time).
+- File paths are confined to the session workspace (`..`/absolute rejected).
+- Every exec runs under the full sandbox profile (landlock/seccomp/cgroup/
+  timeout/cancel/quota) — same as one-shot jobs.
+- Sessions are cleaned on explicit `DELETE`, or on worker startup if left by a
+  crash (no background TTL reaper yet).
+
 ## MCP integration (Claude Code / Hermes-Agent)
 
 `sandbox-mcp` wraps the sandbox as 4 MCP tools an AI Agent can call directly:
