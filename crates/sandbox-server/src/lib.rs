@@ -7,6 +7,7 @@ pub mod audit;
 pub mod config;
 pub mod redact;
 pub mod scheduler;
+pub mod session;
 pub mod worker;
 
 // 以下模块仅内部使用

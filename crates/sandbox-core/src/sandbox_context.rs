@@ -94,7 +94,7 @@ impl SandboxRunner {
     /// cr-026: 执行原语——在**给定工作区**里跑一条命令,套全套安全约束(landlock/seccomp/
     /// cgroup/timeout/cancel/quota/stream),但**不创建/不清理工作区**(工作区生命周期由调用者
     /// 管:一次性 run_job_with_cancel 建与清;会话 exec 用持久工作区)。profile 由参数传入(会话建时绑)。
-    async fn run_in_workspace(
+    pub async fn run_in_workspace(
         &self,
         job_workspace: &crate::workspace::JobWorkspace,
         profile: &SandboxProfile,
