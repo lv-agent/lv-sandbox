@@ -52,6 +52,8 @@ pub struct VolumeMount {
 struct SessionMeta {
     profile_name: String,
     env: HashMap<String, String>,
+    #[serde(default)]
+    volumes: Vec<VolumeMount>,
 }
 
 /// 会话管理器。
@@ -94,10 +96,11 @@ impl SessionManager {
         let id = uuid::Uuid::new_v4().to_string();
         let workspace = self.runner.workspace_mgr().create_session_workspace(&id)?;
 
-        // cr-029: 持久化会话元数据(跨重启重连)
+        // cr-029: 持久化会话元数据(跨重启重连,含 volumes)
         let meta = SessionMeta {
             profile_name: profile_name.to_string(),
             env: meta_env,
+            volumes: volumes.clone(),
         };
         let _ = std::fs::write(
             workspace.root.join(".session-meta.json"),
@@ -112,17 +115,12 @@ impl SessionManager {
         }
 
         // cr-028: 挂卷(workspace/<mount> symlink → 卷目录;卷路径入 extra_writable_paths 授 ReadWrite)
-        for vm in &volumes {
-            let vol_path = self.runner.workspace_mgr().volume_path(&vm.name);
-            std::fs::create_dir_all(&vol_path)?;
-            let link = workspace.workspace.join(&vm.mount);
-            if let Some(parent) = link.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let _ = std::fs::remove_file(&link); // 幂等
-            std::os::unix::fs::symlink(&vol_path, &link)?;
-            profile.extra_writable_paths.push(vol_path);
-        }
+        Self::mount_volumes(
+            self.runner.workspace_mgr(),
+            &workspace,
+            &mut profile,
+            &volumes,
+        )?;
 
         self.sessions.write().expect("sessions lock poisoned").insert(
             id.clone(),
@@ -273,6 +271,28 @@ impl SessionManager {
             .ok_or_else(|| CoreError::Workspace(format!("session not found: {id}")))
     }
 
+    /// cr-028: 挂卷(workspace/<mount> symlink → 卷目录;卷路径入 extra_writable_paths 授 landlock ReadWrite)。
+    /// cr-029: 重建时复用(恢复 landlock 授权)。
+    fn mount_volumes(
+        mgr: &sandbox_core::workspace::WorkspaceManager,
+        workspace: &JobWorkspace,
+        profile: &mut SandboxProfile,
+        volumes: &[VolumeMount],
+    ) -> Result<(), CoreError> {
+        for vm in volumes {
+            let vol_path = mgr.volume_path(&vm.name);
+            std::fs::create_dir_all(&vol_path)?;
+            let link = workspace.workspace.join(&vm.mount);
+            if let Some(parent) = link.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let _ = std::fs::remove_file(&link); // 幂等
+            std::os::unix::fs::symlink(&vol_path, &link)?;
+            profile.extra_writable_paths.push(vol_path);
+        }
+        Ok(())
+    }
+
     pub fn put_file(&self, id: &str, rel: &str, data: &[u8]) -> Result<(), CoreError> {
         let base = self.workspace_dir(id)?;
         sandbox_core::workspace::put_file(&base, rel, data)
@@ -368,6 +388,8 @@ impl SessionManager {
             }
             // 复用既有工作区(create_session_workspace 幂等 mkdir)
             let workspace = mgr.create_session_workspace(&id)?;
+            // cr-029: 重新挂卷(恢复 landlock ReadWrite 授权——否则重启后卷不可写)
+            Self::mount_volumes(mgr, &workspace, &mut profile, &meta.volumes)?;
             self.sessions
                 .write()
                 .expect("sessions lock poisoned")
