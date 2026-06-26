@@ -65,3 +65,38 @@ fn get_file_missing_is_err() {
     let ws = m.create_session_workspace("s4").unwrap();
     assert!(sandbox_core::workspace::get_file(&ws.workspace, "nope.txt").is_err());
 }
+
+// ==================== cr-027: 快照(copy_dir_recursive + WorkspaceManager ops) ====================
+
+#[test]
+fn copy_dir_recursive_copies_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    sandbox_core::workspace::put_file(&src, "a.txt", b"A").unwrap();
+    sandbox_core::workspace::put_file(&src, "sub/b.txt", b"B").unwrap();
+    let dst = tmp.path().join("dst");
+    sandbox_core::workspace::copy_dir_recursive(&src, &dst).unwrap();
+    assert_eq!(sandbox_core::workspace::get_file(&dst, "a.txt").unwrap(), b"A");
+    assert_eq!(sandbox_core::workspace::get_file(&dst, "sub/b.txt").unwrap(), b"B");
+}
+
+#[test]
+fn snapshot_create_restore_list_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = WorkspaceManager::new(tmp.path(), 0);
+    let ws = m.create_session_workspace("s1").unwrap();
+    sandbox_core::workspace::put_file(&ws.workspace, "data.txt", b"hello").unwrap();
+
+    m.create_snapshot(&ws.workspace, "snap1").unwrap();
+    assert!(m.list_snapshots().unwrap().contains(&"snap1".to_string()));
+
+    let ws2 = m.create_session_workspace("s2").unwrap();
+    m.restore_snapshot("snap1", &ws2.workspace).unwrap();
+    assert_eq!(
+        sandbox_core::workspace::get_file(&ws2.workspace, "data.txt").unwrap(),
+        b"hello"
+    );
+
+    m.cleanup_snapshot("snap1").unwrap();
+    assert!(!m.list_snapshots().unwrap().contains(&"snap1".to_string()));
+}

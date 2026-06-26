@@ -190,11 +190,58 @@ impl WorkspaceManager {
         }
         Ok(ids)
     }
+
+    // ==================== cr-027: 快照(磁盘-only,跨重启存活) ====================
+
+    fn snapshots_dir(&self) -> PathBuf {
+        self.base_dir.join("snapshots")
+    }
+
+    /// 建快照:把会话 workspace 整树拷贝到 `snapshots/{id}`。
+    pub fn create_snapshot(&self, src_workspace: &Path, id: &str) -> Result<(), CoreError> {
+        let dst = self.snapshots_dir().join(id);
+        copy_dir_recursive(src_workspace, &dst)
+    }
+
+    /// 从快照恢复:把 `snapshots/{id}` 拷进目标 workspace。快照缺失 → Err。
+    pub fn restore_snapshot(&self, id: &str, dst_workspace: &Path) -> Result<(), CoreError> {
+        let src = self.snapshots_dir().join(id);
+        if !src.exists() {
+            return Err(CoreError::Workspace(format!("snapshot not found: {id}")));
+        }
+        copy_dir_recursive(&src, dst_workspace)
+    }
+
+    /// 列所有快照 id(扫盘)。
+    pub fn list_snapshots(&self) -> Result<Vec<String>, CoreError> {
+        let dir = self.snapshots_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    ids.push(name.to_string());
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    /// 删快照。
+    pub fn cleanup_snapshot(&self, id: &str) -> Result<(), CoreError> {
+        let p = self.snapshots_dir().join(id);
+        if p.exists() {
+            std::fs::remove_dir_all(p)?;
+        }
+        Ok(())
+    }
 }
 
 /// 递归计算目录总大小(cr-022: 看门狗测量用,故 pub)
-pub fn dir_size(path: &Path) -> u64 {
-    let mut total: u64 = 0;
+pub fn dir_size(path: &Path) -> u64 {    let mut total: u64 = 0;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             if let Ok(file_type) = entry.file_type() {
@@ -209,6 +256,23 @@ pub fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// cr-027: 递归拷贝目录树(src 内容 → dst)。目录递归、文件拷贝;符号链接忽略(v1)。
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), CoreError> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ft.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 // ==================== cr-026: 文件 I/O(会话工作区) ====================
