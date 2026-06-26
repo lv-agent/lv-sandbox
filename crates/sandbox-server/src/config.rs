@@ -149,6 +149,9 @@ pub struct ProfileConfig {
     /// cr-022: 工作区聚合磁盘上限(MB)。None/缺省 = 不限(看门狗不起)。
     #[serde(default)]
     pub disk_quota_mb: Option<u64>,
+    /// cr-025: template baseline 环境变量(覆盖核心非保护项;HOME/TMPDIR 保护)。
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
 }
 
 /// rlimit 配置（文件友好，使用人类可读单位）
@@ -253,6 +256,7 @@ impl ProfileConfig {
             extra_readonly_paths,
             egress_allowlist: self.egress_allowlist.clone().unwrap_or_default(),
             disk_quota_mb: self.disk_quota_mb,
+            env: self.env.clone().unwrap_or_default(),
         })
     }
 }

@@ -33,6 +33,8 @@ pub struct SandboxProfile {
     pub egress_allowlist: Vec<crate::egress::EgressRule>,
     /// cr-022: 工作区聚合磁盘上限(MB)。None = 不限(默认,看门狗不起)。
     pub disk_quota_mb: Option<u64>,
+    /// cr-025: template baseline 环境变量(覆盖核心非保护项;HOME/TMPDIR 保护)。
+    pub env: HashMap<String, String>,
 }
 
 impl SandboxProfile {
@@ -69,6 +71,7 @@ impl SandboxProfile {
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
             disk_quota_mb: None,
+            env: HashMap::new(),
         }
     }
 
@@ -100,6 +103,7 @@ impl SandboxProfile {
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
             disk_quota_mb: None,
+            env: HashMap::new(),
         }
     }
 
@@ -131,6 +135,7 @@ impl SandboxProfile {
             extra_readonly_paths: vec![],
             egress_allowlist: vec![],
             disk_quota_mb: None,
+            env: HashMap::new(),
         }
     }
 }

@@ -1,56 +1,50 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-/// 从零构建最小白名单环境变量。
-/// 不继承 runner 的任何环境变量。
+/// 永不可覆盖的隔离核心(HOME/TMPDIR 必须指工作区)。
+const PROTECTED: &[&str] = &["HOME", "TMPDIR"];
+
+/// 从零构建白名单环境变量(不继承 runner 的任何环境变量)。
+///
+/// cr-025 三阶段优先级:
+/// 1. 核心默认(PATH / HOME=workspace / TMPDIR=workspace/tmp / LANG)
+/// 2. `profile_env`(template baseline,operator 可信):覆盖非保护项,可设 PATH/LANG/任意 key
+/// 3. `extra`(request custom_env,agent 传):只加**新** key(非保护、未被前两阶段占用)
+///
+/// HOME/TMPDIR 永不被覆盖。
 pub fn build_sanitized_env(
     _job_id: &str,
     job_workspace: &Path,
+    profile_env: &HashMap<String, String>,
     extra: &HashMap<String, String>,
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
 
-    // 基础白名单
-    env.insert("PATH", "/usr/bin:/bin".to_string());
+    // 1. 核心默认
+    env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
     env.insert(
-        "HOME",
+        "HOME".to_string(),
         job_workspace.to_string_lossy().to_string(),
     );
     env.insert(
-        "TMPDIR",
+        "TMPDIR".to_string(),
         job_workspace.join("tmp").to_string_lossy().to_string(),
     );
-    env.insert("LANG", "C.UTF-8".to_string());
+    env.insert("LANG".to_string(), "C.UTF-8".to_string());
 
-    // 按需添加
-    if let Some(v) = extra.get("TZ") {
-        env.insert("TZ", v.clone());
-    }
-    if let Some(v) = extra.get("SSL_CERT_FILE") {
-        env.insert("SSL_CERT_FILE", v.clone());
-    }
-    if let Some(v) = extra.get("SSL_CERT_DIR") {
-        env.insert("SSL_CERT_DIR", v.clone());
-    }
-    if let Some(v) = extra.get("HTTP_PROXY") {
-        env.insert("HTTP_PROXY", v.clone());
-    }
-    if let Some(v) = extra.get("HTTPS_PROXY") {
-        env.insert("HTTPS_PROXY", v.clone());
-    }
-    if let Some(v) = extra.get("NO_PROXY") {
-        env.insert("NO_PROXY", v.clone());
-    }
-
-    // 加入 extra 中的其他自定义变量
-    for (key, value) in extra {
-        if !env.contains_key(key.as_str()) {
-            env.insert(key, value.clone());
+    // 2. profile.env(template baseline):覆盖非保护项,可加任意 key
+    for (k, v) in profile_env {
+        if !PROTECTED.contains(&k.as_str()) {
+            env.insert(k.clone(), v.clone());
         }
     }
 
-    // 将 key 从 &str 转为 String
-    env.into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
+    // 3. request custom_env:只加新 key(非保护、未占用)
+    for (k, v) in extra {
+        if !PROTECTED.contains(&k.as_str()) && !env.contains_key(k.as_str()) {
+            env.insert(k.clone(), v.clone());
+        }
+    }
+
+    env
 }

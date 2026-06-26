@@ -2,6 +2,7 @@
 //!
 //! TDD RED 阶段：先写测试，覆盖 YAML 配置加载全场景
 
+use std::collections::HashMap;
 use std::io::Write as IoWrite;
 
 // ==================== 默认配置 ====================
@@ -149,6 +150,7 @@ fn profile_config_to_sandbox_profile_default_fill() {
         default_timeout: None,
         egress_allowlist: None,
         disk_quota_mb: None,
+        env: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -186,6 +188,10 @@ fn profile_config_to_custom_values_override_defaults() {
         default_timeout: Some("60s".to_string()),
         egress_allowlist: None,
         disk_quota_mb: Some(50),
+        env: Some(HashMap::from([(
+            "PYTHONPATH".to_string(),
+            "/opt/t".to_string(),
+        )])),
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -209,6 +215,8 @@ fn profile_config_to_custom_values_override_defaults() {
     assert_eq!(profile.extra_readonly_paths.len(), 2);
     // cr-022: disk_quota_mb 透传(MB)
     assert_eq!(profile.disk_quota_mb, Some(50));
+    // cr-025: env 透传
+    assert_eq!(profile.env.get("PYTHONPATH").map(|s| s.as_str()), Some("/opt/t"));
 }
 
 // ==================== cr-023: server.api_key ====================

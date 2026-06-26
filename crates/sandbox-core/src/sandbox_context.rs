@@ -89,6 +89,7 @@ impl SandboxRunner {
         let mut env = build_sanitized_env(
             &request.job_id,
             &job_workspace.root,
+            &profile.env,
             &request.custom_env,
         );
 
