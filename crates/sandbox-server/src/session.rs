@@ -40,6 +40,13 @@ pub struct SessionInfo {
     pub execs: u64,
 }
 
+/// cr-028: 卷挂载声明(`workspace/<mount>` symlink → 卷目录)。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VolumeMount {
+    pub name: String,
+    pub mount: String,
+}
+
 /// 会话管理器。
 pub struct SessionManager {
     runner: Arc<SandboxRunner>,
@@ -56,13 +63,14 @@ impl SessionManager {
         }
     }
 
-    /// 建会话:查 profile → 建持久工作区(可从快照恢复)→ 入表。`env` 合并进绑定 profile.env。
-    /// cr-027: `from_snapshot=Some(id)` → 把快照内容拷进新工作区(快照只存 fs;profile/env 此处给)。
+    /// 建会话:查 profile → 建持久工作区(可从快照恢复 / 挂卷)→ 入表。
+    /// cr-027: `from_snapshot` 从快照 fork;cr-028: `volumes` 挂持久卷(symlink + landlock ReadWrite)。
     pub fn create_session(
         &self,
         profile_name: &str,
         env: HashMap<String, String>,
         from_snapshot: Option<String>,
+        volumes: Vec<VolumeMount>,
     ) -> Result<String, CoreError> {
         let mut profile = self
             .runner
@@ -83,6 +91,19 @@ impl SessionManager {
             self.runner
                 .workspace_mgr()
                 .restore_snapshot(snap_id, &workspace.workspace)?;
+        }
+
+        // cr-028: 挂卷(workspace/<mount> symlink → 卷目录;卷路径入 extra_writable_paths 授 ReadWrite)
+        for vm in &volumes {
+            let vol_path = self.runner.workspace_mgr().volume_path(&vm.name);
+            std::fs::create_dir_all(&vol_path)?;
+            let link = workspace.workspace.join(&vm.mount);
+            if let Some(parent) = link.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let _ = std::fs::remove_file(&link); // 幂等
+            std::os::unix::fs::symlink(&vol_path, &link)?;
+            profile.extra_writable_paths.push(vol_path);
         }
 
         self.sessions.write().expect("sessions lock poisoned").insert(
@@ -282,5 +303,17 @@ impl SessionManager {
     /// 销毁快照。
     pub fn destroy_snapshot(&self, id: &str) -> Result<(), CoreError> {
         self.runner.workspace_mgr().cleanup_snapshot(id)
+    }
+
+    // ==================== cr-028: 卷(跨会话持久 rw) ====================
+
+    pub fn create_volume(&self, name: &str) -> Result<(), CoreError> {
+        self.runner.workspace_mgr().create_volume(name)
+    }
+    pub fn list_volumes(&self) -> Result<Vec<String>, CoreError> {
+        self.runner.workspace_mgr().list_volumes()
+    }
+    pub fn cleanup_volume(&self, name: &str) -> Result<(), CoreError> {
+        self.runner.workspace_mgr().cleanup_volume(name)
     }
 }

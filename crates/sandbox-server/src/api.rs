@@ -26,7 +26,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use sandbox_core::job::StreamEvent;
 
 use crate::scheduler::Scheduler;
-use crate::session::SessionManager;
+use crate::session::{SessionManager, VolumeMount};
 
 /// 应用共享状态
 pub struct AppState {
@@ -545,6 +545,9 @@ struct CreateSessionRequest {
     /// cr-027: 从快照恢复(fork)。None = 空工作区。
     #[serde(default)]
     from_snapshot: Option<String>,
+    /// cr-028: 挂载持久卷。
+    #[serde(default)]
+    volumes: Option<Vec<VolumeMount>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -560,6 +563,7 @@ async fn create_session(
         &req.profile_name,
         req.env.unwrap_or_default(),
         req.from_snapshot,
+        req.volumes.unwrap_or_default(),
     ) {
         Ok(id) => (
             StatusCode::CREATED,

@@ -2,7 +2,7 @@
 use sandbox_core::job::{JobRequest, JobStatus};
 use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
 use sandbox_server::audit::AuditLogger;
-use sandbox_server::session::SessionManager;
+use sandbox_server::session::{SessionManager, VolumeMount};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +35,7 @@ fn req(argv: Vec<String>) -> JobRequest {
 #[tokio::test]
 async fn session_exec_shares_workspace_across_calls() {
     let (_tmp, m) = mgr().await;
-    let id = m.create_session("shell", HashMap::new(), None).unwrap();
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
     // exec A 写文件
     let r1 = m
         .exec_session(
@@ -71,7 +71,7 @@ async fn session_exec_shares_workspace_across_calls() {
 #[tokio::test]
 async fn session_lifecycle_create_list_get_destroy() {
     let (_tmp, m) = mgr().await;
-    let id = m.create_session("shell", HashMap::new(), None).unwrap();
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
     assert!(m.get_session(&id).is_some());
     assert!(m.list_sessions().iter().any(|s| s.session_id == id));
     m.destroy_session(&id).unwrap();
@@ -82,13 +82,13 @@ async fn session_lifecycle_create_list_get_destroy() {
 #[tokio::test]
 async fn create_session_unknown_profile_errors() {
     let (_tmp, m) = mgr().await;
-    assert!(m.create_session("nope", HashMap::new(), None).is_err());
+    assert!(m.create_session("nope", HashMap::new(), None, vec![]).is_err());
 }
 
 #[tokio::test]
 async fn snapshot_then_restore_forks_session() {
     let (_tmp, m) = mgr().await;
-    let id = m.create_session("shell", HashMap::new(), None).unwrap();
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
     // exec 写文件
     m.exec_session(
         &id,
@@ -101,7 +101,9 @@ async fn snapshot_then_restore_forks_session() {
     // 快照
     let snap = m.snapshot_session(&id).await.unwrap();
     // 从快照建新会话(fork)
-    let id2 = m.create_session("shell", HashMap::new(), Some(snap.clone())).unwrap();
+    let id2 = m
+        .create_session("shell", HashMap::new(), Some(snap.clone()), vec![])
+        .unwrap();
     let r = m
         .exec_session(
             &id2,
@@ -120,4 +122,49 @@ async fn snapshot_then_restore_forks_session() {
     assert!(m.list_snapshots().unwrap().contains(&snap));
     m.destroy_snapshot(&snap).unwrap();
     assert!(!m.list_snapshots().unwrap().contains(&snap));
+}
+
+#[tokio::test]
+async fn volume_persists_across_sessions() {
+    let (_tmp, m) = mgr().await;
+    let vol = VolumeMount {
+        name: "shared".into(),
+        mount: "volumes/shared".into(),
+    };
+    // 会话 A 挂卷 + 写
+    let a = m
+        .create_session("shell", HashMap::new(), None, vec![vol.clone()])
+        .unwrap();
+    m.exec_session(
+        &a,
+        req(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "echo persist > volumes/shared/x.txt".into(),
+        ]),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    m.destroy_session(&a).unwrap();
+    // 会话 B 挂同卷 + 读(跨会话持久)
+    let b = m
+        .create_session("shell", HashMap::new(), None, vec![vol.clone()])
+        .unwrap();
+    let r = m
+        .exec_session(
+            &b,
+            req(vec!["/bin/cat".into(), "volumes/shared/x.txt".into()]),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&r.stdout).contains("persist"),
+        "volume should persist across sessions: {:?}",
+        r.stdout
+    );
+    m.cleanup_volume("shared").unwrap();
 }
