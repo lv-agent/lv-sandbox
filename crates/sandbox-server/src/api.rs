@@ -59,6 +59,7 @@ pub fn app(state: AppState) -> Router {
             get(get_session).delete(destroy_session),
         )
         .route("/api/v1/sessions/{id}/exec", post(exec_session))
+        .route("/api/v1/sessions/{id}/tty", get(crate::tty::session_tty))
         .route("/api/v1/sessions/{id}/snapshot", post(snapshot_session))
         .route("/api/v1/sessions/{id}/files", get(list_files))
         .route(

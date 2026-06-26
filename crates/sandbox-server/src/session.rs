@@ -81,6 +81,31 @@ impl SessionManager {
         self
     }
 
+    /// cr-033: 暴露会话运行上下文(tty handler 用):workspace + profile + exec_lock + runner。
+    pub fn exec_context(
+        &self,
+        id: &str,
+    ) -> Result<
+        (
+            JobWorkspace,
+            SandboxProfile,
+            Arc<tokio::sync::Mutex<()>>,
+            Arc<SandboxRunner>,
+        ),
+        CoreError,
+    > {
+        let guard = self.sessions.read().expect("sessions lock poisoned");
+        let e = guard
+            .get(id)
+            .ok_or_else(|| CoreError::Workspace(format!("session not found: {id}")))?;
+        Ok((
+            e.workspace.clone(),
+            e.profile.clone(),
+            e.exec_lock.clone(),
+            self.runner.clone(),
+        ))
+    }
+
     /// 建会话:查 profile → 建持久工作区(可从快照恢复 / 挂卷)→ 入表。
     /// cr-027: `from_snapshot` 从快照 fork;cr-028: `volumes` 挂持久卷(symlink + landlock ReadWrite)。
     pub fn create_session(

@@ -52,6 +52,8 @@ pub struct PreparedSandboxContext {
     seccomp: Option<sandbox_seccomp::PreparedFilter>,
     rlimit: RlimitConfig,
     cgroup: Option<sandbox_cgroup::JobCgroup>,
+    /// cr-033: PTY slave fd（tty 模式：setsid 后设为 controlling terminal）。None = 非 tty。
+    pub tty_slave_fd: Option<RawFd>,
 }
 
 impl PreparedSandboxContext {
@@ -154,6 +156,7 @@ impl PreparedSandboxContext {
             seccomp,
             rlimit,
             cgroup,
+            tty_slave_fd: None,
         })
     }
 
@@ -175,6 +178,11 @@ impl PreparedSandboxContext {
         // setsid
         if unsafe { libc::setsid() } == -1 {
             report_error(PreExecError::SetSid);
+        }
+
+        // cr-033: tty 模式——设 PTY slave 为 controlling terminal(在 close_fds 之前)
+        if let Some(slave_fd) = self.tty_slave_fd {
+            unsafe { libc::ioctl(slave_fd, libc::TIOCSCTTY, 0); }
         }
 
         // no_new_privs（landlock/seccomp 的前提）

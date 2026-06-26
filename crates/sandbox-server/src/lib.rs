@@ -8,6 +8,7 @@ pub mod config;
 pub mod redact;
 pub mod scheduler;
 pub mod session;
+pub mod tty;
 pub mod webhook;
 pub mod worker;
 
