@@ -351,6 +351,29 @@ curl -X DELETE http://127.0.0.1:8080/api/v1/snapshots/$SNAP
 Snapshots persist on disk and **survive worker restart**. A snapshot waits for
 any running exec to finish (taken while the session is quiet).
 
+### Volumes (persistent storage)
+
+A **volume** is a named directory that persists across sessions and restarts.
+Mount one into a session and the task sees it at `workspace/<mount>` (a symlink
+to the volume); writes survive the session's destruction. Landlock grants the
+volume read-write.
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/volumes -H 'content-type: application/json' -d '{"name":"data"}'
+curl     http://127.0.0.1:8080/api/v1/volumes                                  # list
+# mount into a session (task writes ./volumes/data, persists across sessions):
+curl -X POST http://127.0.0.1:8080/api/v1/sessions \
+  -H 'content-type: application/json' \
+  -d '{"profile_name":"shell","volumes":[{"name":"data","mount":"volumes/data"}]}'
+curl -X DELETE http://127.0.0.1:8080/api/v1/volumes/data
+```
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/volumes` | create (`{name}`) |
+| `GET` | `/volumes` | list |
+| `DELETE` | `/volumes/{name}` | delete |
+
 ## MCP integration (Claude Code / Hermes-Agent)
 
 `sandbox-mcp` wraps the sandbox as 4 MCP tools an AI Agent can call directly:

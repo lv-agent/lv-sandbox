@@ -314,6 +314,26 @@ curl -X DELETE http://127.0.0.1:8080/api/v1/snapshots/$SNAP
 
 快照落盘,**跨 worker 重启存活**。快照会等运行中 exec 完成(静默时拍)。
 
+### 卷（持久存储）
+
+**卷**是命名目录,跨会话、跨重启持久。挂进会话后,任务在 `workspace/<mount>` 见到它(symlink 指向卷);写入在会话销毁后仍保留。Landlock 授卷读写。
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/volumes -H 'content-type: application/json' -d '{"name":"data"}'
+curl     http://127.0.0.1:8080/api/v1/volumes                                   # 列
+# 挂进会话(任务写 ./volumes/data,跨会话持久):
+curl -X POST http://127.0.0.1:8080/api/v1/sessions \
+  -H 'content-type: application/json' \
+  -d '{"profile_name":"shell","volumes":[{"name":"data","mount":"volumes/data"}]}'
+curl -X DELETE http://127.0.0.1:8080/api/v1/volumes/data
+```
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/volumes` | 建(`{name}`) |
+| `GET` | `/volumes` | 列 |
+| `DELETE` | `/volumes/{name}` | 删 |
+
 ## MCP 集成（Claude Code / Hermes-Agent）
 
 `sandbox-mcp` 把沙箱封装为 4 个 MCP 工具，AI Agent 可直接调用：
