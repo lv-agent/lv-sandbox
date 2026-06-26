@@ -223,6 +223,29 @@ profiles:
 
 自定义 profile 通过配置文件添加（见 [配置参考](#配置参考)）。
 
+### 模板（预装环境）
+
+"模板"就是一个 profile——它捆绑一组预装包(只读目录)+ baseline 环境变量,让运行时找得到。构镜像时把目录装好一次,profile 引用即可。
+
+```bash
+# 构 worker 镜像时:
+scripts/build-template.sh data-science "pandas numpy scikit-learn"
+```
+
+```yaml
+profiles:
+  data-science:
+    extra_readonly_paths: ["/opt/templates/data-science"]
+    env:
+      PYTHONPATH: "/opt/templates/data-science"
+      MPLBACKEND: "Agg"
+    rlimit:
+      cpu_seconds: 30
+    default_timeout: "60s"
+```
+
+profile 的 `env` 是 baseline(operator 可信):可设/覆盖 `PATH`、`LANG`,可加任意 key。请求级 `custom_env` 只能**加** profile 没设的 key。`HOME`/`TMPDIR` 永远指工作区,任何情况下都不可覆盖。
+
 ---
 
 ## MCP 集成（Claude Code / Hermes-Agent）

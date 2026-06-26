@@ -250,6 +250,34 @@ Three built-in profiles, chosen per task at submit time:
 
 Custom profiles are added via the config file (see [Config reference](#config-reference)).
 
+### Templates (pre-baked environments)
+
+A "template" is just a profile that bundles a pre-installed package set (a
+read-only dir) plus baseline env vars so the runtime finds them. Build the dir
+once when building the worker image, then reference it from a profile.
+
+```bash
+# in your worker image build:
+scripts/build-template.sh data-science "pandas numpy scikit-learn"
+```
+
+```yaml
+profiles:
+  data-science:
+    extra_readonly_paths: ["/opt/templates/data-science"]
+    env:
+      PYTHONPATH: "/opt/templates/data-science"
+      MPLBACKEND: "Agg"
+    rlimit:
+      cpu_seconds: 30
+    default_timeout: "60s"
+```
+
+Profile `env` is the baseline (operator-trusted): it can set/override `PATH` and
+`LANG`, and add any key. Per-request `custom_env` can only *add* keys the profile
+hasn't set. `HOME`/`TMPDIR` always point at the workspace and can never be
+overridden.
+
 ---
 
 ## MCP integration (Claude Code / Hermes-Agent)
