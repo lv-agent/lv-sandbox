@@ -47,6 +47,13 @@ pub struct VolumeMount {
     pub mount: String,
 }
 
+/// cr-029: 会话持久元数据(写 `sessions/{id}/.session-meta.json`,跨重启重建用)。
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct SessionMeta {
+    profile_name: String,
+    env: HashMap<String, String>,
+}
+
 /// 会话管理器。
 pub struct SessionManager {
     runner: Arc<SandboxRunner>,
@@ -79,12 +86,23 @@ impl SessionManager {
             .ok_or_else(|| CoreError::ProfileNotFound(profile_name.to_string()))?
             .clone();
         // 会话级 env 合并进绑定 profile(template baseline + 会话补充)
+        let meta_env = env.clone(); // cr-029: 持久化用(重建时再合并)
         for (k, v) in env {
             profile.env.insert(k, v);
         }
 
         let id = uuid::Uuid::new_v4().to_string();
         let workspace = self.runner.workspace_mgr().create_session_workspace(&id)?;
+
+        // cr-029: 持久化会话元数据(跨重启重连)
+        let meta = SessionMeta {
+            profile_name: profile_name.to_string(),
+            env: meta_env,
+        };
+        let _ = std::fs::write(
+            workspace.root.join(".session-meta.json"),
+            serde_json::to_vec(&meta).unwrap_or_default(),
+        );
 
         // cr-027: 从快照恢复(fork)
         if let Some(snap_id) = &from_snapshot {
@@ -315,5 +333,61 @@ impl SessionManager {
     }
     pub fn cleanup_volume(&self, name: &str) -> Result<(), CoreError> {
         self.runner.workspace_mgr().cleanup_volume(name)
+    }
+
+    // ==================== cr-029: 跨重启重连(从盘重建注册表) ====================
+
+    /// 启动恢复:扫 `sessions/`,读 `.session-meta.json`,重建 SessionEntry。
+    /// profile 缺失则跳过(记日志)。返回重建数。
+    pub fn rebuild_from_disk(&self) -> Result<usize, CoreError> {
+        let mgr = self.runner.workspace_mgr();
+        let ids = mgr.list_sessions()?;
+        let mut count = 0;
+        for id in ids {
+            let meta_path = mgr
+                .base_dir()
+                .join("sessions")
+                .join(&id)
+                .join(".session-meta.json");
+            let Ok(content) = std::fs::read_to_string(&meta_path) else {
+                continue; // 无 meta(遗留/未知)→ 跳过
+            };
+            let Ok(meta) = serde_json::from_str::<SessionMeta>(&content) else {
+                continue;
+            };
+            let Some(mut profile) = self.runner.profile_registry().get(&meta.profile_name).cloned() else {
+                tracing::warn!(
+                    session_id = %id,
+                    profile = %meta.profile_name,
+                    "rebuild skip: profile not found"
+                );
+                continue;
+            };
+            for (k, v) in &meta.env {
+                profile.env.insert(k.clone(), v.clone());
+            }
+            // 复用既有工作区(create_session_workspace 幂等 mkdir)
+            let workspace = mgr.create_session_workspace(&id)?;
+            self.sessions
+                .write()
+                .expect("sessions lock poisoned")
+                .insert(
+                    id.clone(),
+                    SessionEntry {
+                        id: id.clone(),
+                        workspace,
+                        profile,
+                        created_at: Instant::now(),
+                        last_activity: Instant::now(),
+                        execs: 0,
+                        exec_lock: Arc::new(tokio::sync::Mutex::new(())),
+                    },
+                );
+            count += 1;
+        }
+        if count > 0 {
+            tracing::info!(rebuilt = count, "sessions rebuilt from disk");
+        }
+        Ok(count)
     }
 }

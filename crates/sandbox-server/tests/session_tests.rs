@@ -168,3 +168,46 @@ async fn volume_persists_across_sessions() {
     );
     m.cleanup_volume("shared").unwrap();
 }
+
+#[tokio::test]
+async fn session_survives_restart_via_rebuild() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = SandboxConfig {
+        sandbox_base_dir: tmp.path().to_path_buf(),
+        disk_watermark_bytes: 1024 * 1024 * 1024,
+    };
+    // SM1: 建会话 + 写文件
+    let runner1 = Arc::new(SandboxRunner::new(&cfg).await.unwrap());
+    let sm1 = SessionManager::new(runner1, Arc::new(AuditLogger::noop()));
+    let id = sm1.create_session("shell", HashMap::new(), None, vec![]).unwrap();
+    sm1.exec_session(
+        &id,
+        req(vec!["/bin/sh".into(), "-c".into(), "echo survived > keep.txt".into()]),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    drop(sm1);
+    // SM2: 新 manager(同 base_dir)= "重启"
+    let runner2 = Arc::new(SandboxRunner::new(&cfg).await.unwrap());
+    let sm2 = SessionManager::new(runner2, Arc::new(AuditLogger::noop()));
+    let n = sm2.rebuild_from_disk().unwrap();
+    assert_eq!(n, 1, "one session should be rebuilt");
+    assert!(sm2.get_session(&id).is_some(), "session should be reconnectable");
+    // exec 读到重启前写入的文件
+    let r = sm2
+        .exec_session(
+            &id,
+            req(vec!["/bin/cat".into(), "keep.txt".into()]),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&r.stdout).contains("survived"),
+        "rebuilt session should see pre-restart file: {:?}",
+        r.stdout
+    );
+}
