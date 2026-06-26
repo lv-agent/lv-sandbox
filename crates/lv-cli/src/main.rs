@@ -38,6 +38,8 @@ enum Cmd {
     },
     /// Run a command in a session
     Exec(ExecArgs),
+    /// Interactive shell (PTY over WebSocket)
+    Shell { id: String, argv: Vec<String> },
     /// Session files
     Files {
         #[command(subcommand)]
@@ -307,6 +309,87 @@ fn print_out(r: &JobResp) {
     }
 }
 
+/// cr-033: 交互 shell——WebSocket + raw terminal。
+async fn run_shell(base: &str, _api_key: Option<&str>, sid: &str, argv: &[String]) -> Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use std::os::unix::io::AsRawFd;
+
+    let ws_base = base
+        .replacen("http://", "ws://", 1)
+        .replacen("https://", "wss://", 1);
+    let mut url = format!("{}/api/v1/sessions/{}/tty?", ws_base.trim_end_matches('/'), sid);
+    for a in argv {
+        let enc = a.replace(' ', "+").replace('&', "%26").replace('#', "%23");
+        url.push_str(&format!("argv={enc}&"));
+    }
+    let url = url.trim_end_matches('&').to_string();
+
+    let (ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .context("WebSocket connect")?;
+    let (mut ws_tx, mut ws_rx) = ws.split();
+
+    // raw terminal
+    let stdin_fd = std::io::stdin().as_raw_fd();
+    let mut orig: libc::termios = unsafe { std::mem::zeroed() };
+    let raw_ok = unsafe { libc::tcgetattr(stdin_fd, &mut orig) } == 0;
+    if raw_ok {
+        let mut raw = orig;
+        unsafe { libc::cfmakeraw(&mut raw); }
+        unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &raw); }
+    }
+
+    let result: Result<()> = async {
+        use tokio::io::AsyncReadExt;
+        let mut stdin = tokio::io::stdin();
+        let mut stdout = std::io::stdout();
+        let mut buf = [0u8; 1024];
+        loop {
+            tokio::select! {
+                n = stdin.read(&mut buf) => {
+                    let n = n?;
+                    if n == 0 { break; }
+                    if ws_tx.send(tokio_tungstenite::tungstenite::Message::binary(buf[..n].to_vec())).await.is_err() { break; }
+                }
+                msg = ws_rx.next() => {
+                    match msg {
+                        Some(Ok(m)) => match m {
+                            tokio_tungstenite::tungstenite::Message::Binary(data) => {
+                                use std::io::Write;
+                                let _ = stdout.write_all(&data);
+                                let _ = stdout.flush();
+                            }
+                            tokio_tungstenite::tungstenite::Message::Text(s) => {
+                                // control message (exit/timeout/error)?
+                                if s.contains("\"type\":\"exit\"")
+                                    || s.contains("\"type\":\"timeout\"")
+                                    || s.contains("\"type\":\"error\"")
+                                {
+                                    eprintln!("{s}");
+                                    break;
+                                }
+                                use std::io::Write;
+                                let _ = stdout.write_all(s.as_bytes());
+                                let _ = stdout.flush();
+                            }
+                            tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                            _ => {}
+                        },
+                        _ => break,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    if raw_ok {
+        unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &orig); }
+    }
+    result
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -375,6 +458,12 @@ async fn main() -> Result<()> {
                 .await?;
             print_out(&r);
             std::process::exit(r.exit_code.unwrap_or(0));
+        }
+        Cmd::Shell { id, argv } => {
+            if argv.is_empty() {
+                return Err(anyhow!("no argv given"));
+            }
+            run_shell(&cli.url, cli.api_key.as_deref(), &id, &argv).await?;
         }
         Cmd::Files { cmd } => match cmd {
             FilesCmd::Put { id, path, local } => {
