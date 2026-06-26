@@ -1,12 +1,17 @@
 # HTTP API reference
 
 Base path: `/api/v1`. Content type: `application/json` for request bodies and
-JSON responses. All endpoints are unauthenticated by default (put the server
-behind your own auth/network boundary in production).
+JSON responses. See [usage.md](usage.md) for a tutorial-style walkthrough.
+
+## Authentication
+
+By default the API has no auth. Set `server.api_key` to require
+`Authorization: Bearer <key>` on `/api/v1/*` and `/metrics` (`/health` stays
+open for probes). Missing or wrong credentials → `401 {"error":"unauthorized"}`.
+If enabled, `sandbox-mcp` must set `SANDBOX_API_KEY` to the same value.
 
 Jobs are **asynchronous**: submitting returns a `job_id` immediately; poll
-`GET /jobs/{id}` for the result. See [usage.md](usage.md#submit-a-task-async) for
-a tutorial-style walkthrough.
+`GET /jobs/{id}` for the result.
 
 ---
 
@@ -118,6 +123,79 @@ Cancel a running task. The process group receives `SIGTERM` then `SIGKILL`.
 
 ---
 
+## Streaming (SSE)
+
+Add `?stream=true` to `POST /jobs` (or `POST /sessions/{id}/exec`) to receive a
+`text/event-stream` of live stdout instead of a `job_id`: events `started` →
+`stdout` (one per chunk) → `result` (final `JobResult`, then the stream closes).
+stderr is **not** streamed (only in `result`).
+
+---
+
+## Sessions (persistent sandboxes)
+
+A session is a long-lived workspace + bound profile, surviving across `exec`
+calls and worker restart. See [usage.md](usage.md#sessions-persistent-sandboxes).
+
+### `POST /api/v1/sessions`
+
+```json
+{ "profile_name": "shell", "env": {}, "from_snapshot": null,
+  "volumes": [{"name":"data","mount":"volumes/data"}] }
+```
+
+→ `201 {"session_id": "..."}`. `from_snapshot` forks from a snapshot; `volumes`
+mounts persistent volumes. The profile is **bound at create**.
+
+### `GET /api/v1/sessions` · `GET /api/v1/sessions/{id}` · `DELETE /api/v1/sessions/{id}`
+
+List, status, destroy.
+
+### `POST /api/v1/sessions/{id}/exec`
+
+Run a command in the session's persistent workspace (shares files across calls).
+Body like `POST /jobs`; supports `?stream=true`. Execs in a session are
+**serialized** (one at a time).
+
+### Session files
+
+| Method | Path | Purpose |
+|---|---|---|
+| `PUT` | `/sessions/{id}/files/{path}` | upload (raw bytes) |
+| `GET` | `/sessions/{id}/files/{path}` | download |
+| `GET` | `/sessions/{id}/files?path=` | list |
+| `DELETE` | `/sessions/{id}/files/{path}` | delete |
+
+Paths are confined to the workspace (`..`/absolute → `400`).
+
+---
+
+## Snapshots
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/sessions/{id}/snapshot` | snapshot → `201 {"snapshot_id":"..."}` |
+| `GET` | `/snapshots` | list |
+| `DELETE` | `/snapshots/{id}` | delete |
+
+A snapshot is a full copy of a session's workspace; create a session with
+`from_snapshot` to fork. Survives restart.
+
+---
+
+## Volumes
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/volumes` `{name}` | create |
+| `GET` | `/volumes` | list |
+| `DELETE` | `/volumes/{name}` | delete |
+
+A named persistent directory mounted into sessions (read-write, via symlink +
+landlock); survives session destroy and restart.
+
+---
+
 ## Worker status
 
 ### `GET /api/v1/status`
@@ -187,5 +265,10 @@ running gauge, and fork/exec duration histogram.
   `/usr/bin:/bin`); resolve binaries to their full path.
 - **`custom_env` is allowlisted**, not a free pass-through — only known-safe vars
   plus your extras are set.
+- **`dry_run: true`** on `POST /jobs` validates without executing — returns the
+  profile's limits (timeout, landlock, max stdout, fail_closed, egress allowlist,
+  disk_quota_mb).
+- **`disk_quota_mb`** (per profile) caps a task's aggregate workspace usage; a
+  task that exceeds it is reaped with `status: "DiskQuotaExceeded"`.
 - **Completed jobs are eventually evicted** from the in-memory job table; poll
-  promptly rather than hours later.
+  promptly rather than hours later. (Sessions/snapshots/volumes persist on disk.)

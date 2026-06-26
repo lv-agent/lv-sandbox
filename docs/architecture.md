@@ -65,6 +65,23 @@ MCP:    AI Agent ──stdio──▶ sandbox-mcp ──HTTP──▶ sandbox-se
 multiple AI Agents share a single sandbox-server, reusing its concurrency control
 and metrics, without each maintaining its own engine.
 
+### Sessions & persistence
+
+Beyond one-shot jobs (`POST /jobs` → poll), the server offers **sessions**:
+long-lived workspaces bound to a profile, addressed by id across requests. The
+execution core is shared — `run_in_workspace` runs a command under the full
+isolation stack in a given workspace; one-shot jobs create+clean the workspace
+around it, sessions reuse a persistent one.
+
+- **SessionManager** holds the in-memory session registry; each session's
+  workspace lives under `base_dir/sessions/{id}/`.
+- **Snapshots** (`base_dir/snapshots/{id}/`) are full workspace copies for
+  forking new sessions; **volumes** (`base_dir/volumes/{name}/`) are persistent
+  dirs mounted into a session via a symlink + a Landlock read-write rule.
+- Sessions, snapshots, and volumes live on disk and are **rebuilt on worker
+  restart**, so ids survive restart (reconnect). Execs within a session are
+  serialized.
+
 ---
 
 ## Security mechanisms

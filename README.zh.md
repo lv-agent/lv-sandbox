@@ -27,6 +27,10 @@ lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是
 - **YAML 配置**：内置 `shell`/`python`/`node` profile，可自定义，支持热重载
 - **内置运行时**：镜像含 `python3`（+`requests`/`httpx`）与 `node`，`python`/`node` profile 开箱即用
 - **异步任务 + 取消**：提交立即返回，轮询取结果，可取消运行中任务（SIGTERM → SIGKILL）
+- **持久会话**：长期工作区,支持多次 `exec`、文件上传/下载、**快照**(fork)、**持久卷**;跨 worker 重启存活。进程级内核上的 E2B 式沙箱模型——见 [docs/zh/usage.md](docs/zh/usage.md#会话持久沙箱)
+- **流式 stdout(SSE)**：`?stream=true` 实时输出
+- **每任务磁盘配额**：`disk_quota_mb` 收割失控写入(`DiskQuotaExceeded`)
+- **可选 API 鉴权**：`server.api_key`(Bearer);`/health` 放行
 - **HTTP API**：提交/查询/取消、列 profile、重载配置、Prometheus 指标
 - **输出脱敏与就绪**：`stdout`/`stderr` 返回前清洗密钥；`/health` 报告安全机制生效状态
 - **MCP 集成**：`sandbox-mcp` 网关对接 Claude Code / Hermes-Agent

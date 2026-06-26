@@ -1,8 +1,12 @@
 # HTTP API 参考
 
-基础路径:`/api/v1`。请求体与 JSON 响应均为 `application/json`。默认无鉴权(生产环境请自行在 server 前加鉴权/网络边界)。
+基础路径:`/api/v1`。请求体与 JSON 响应均为 `application/json`。教程式说明见 [usage.md](usage.md)。
 
-任务是**异步**的:提交立即返回 `job_id`,轮询 `GET /jobs/{id}` 取结果。教程式说明见 [usage.md](usage.md#提交任务异步)。
+## 鉴权
+
+默认无鉴权。配 `server.api_key` 后,`/api/v1/*` 与 `/metrics` 需 `Authorization: Bearer <key>`(`/health` 放行探活)。缺失或错误 → `401 {"error":"unauthorized"}`。开启后 `sandbox-mcp` 须配 `SANDBOX_API_KEY` 同值。
+
+任务是**异步**的:提交立即返回 `job_id`,轮询 `GET /jobs/{id}` 取结果。
 
 ---
 
@@ -110,6 +114,70 @@
 | `200 OK` | `{"job_id": "...", "status": "Cancelled"}` | 已取消 |
 | `404 Not Found` | `{"error": "任务不存在"}` | 未知 job |
 | `409 Conflict` | `{"error": "任务已完成,无法取消"}` | 已完成 |
+
+---
+
+## 流式(SSE)
+
+`POST /jobs`(或 `POST /sessions/{id}/exec`)加 `?stream=true`,返回 `text/event-stream` 实时 stdout:事件 `started` → `stdout`(多块)→ `result`(终态 `JobResult`,发完关流)。stderr **不流**(仅 result)。
+
+---
+
+## 会话(持久沙箱)
+
+会话 = 长期工作区 + 绑定 profile,跨 exec 存活、跨重启存活。见 [usage.md](usage.md#会话持久沙箱)。
+
+### `POST /api/v1/sessions`
+
+```json
+{ "profile_name": "shell", "env": {}, "from_snapshot": null,
+  "volumes": [{"name":"data","mount":"volumes/data"}] }
+```
+
+→ `201 {"session_id": "..."}`。`from_snapshot` 从快照 fork;`volumes` 挂持久卷。profile **建时绑**。
+
+### `GET /api/v1/sessions` · `GET /api/v1/sessions/{id}` · `DELETE /api/v1/sessions/{id}`
+
+列 / 状态 / 销毁。
+
+### `POST /api/v1/sessions/{id}/exec`
+
+在会话持久工作区跑命令(跨调用共享文件)。body 同 `POST /jobs`;支持 `?stream=true`。会话内 exec **串行**。
+
+### 会话文件
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `PUT` | `/sessions/{id}/files/{path}` | 上传(原始字节) |
+| `GET` | `/sessions/{id}/files/{path}` | 下载 |
+| `GET` | `/sessions/{id}/files?path=` | 列 |
+| `DELETE` | `/sessions/{id}/files/{path}` | 删 |
+
+路径圈在工作区内(`..`/绝对路径 → `400`)。
+
+---
+
+## 快照
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/sessions/{id}/snapshot` | 快照 → `201 {"snapshot_id":"..."}` |
+| `GET` | `/snapshots` | 列 |
+| `DELETE` | `/snapshots/{id}` | 删 |
+
+快照是会话工作区的整树拷贝;建会话带 `from_snapshot` 即 fork。跨重启存活。
+
+---
+
+## 卷
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/volumes` `{name}` | 建 |
+| `GET` | `/volumes` | 列 |
+| `DELETE` | `/volumes/{name}` | 删 |
+
+命名持久目录,挂进会话(读写,经 symlink + landlock);跨会话销毁 + 跨重启存活。
 
 ---
 

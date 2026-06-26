@@ -65,6 +65,14 @@ a single worker — fast cold-start, low overhead, high throughput.
   `node`, so the `python` / `node` profiles work out of the box
 - **Async jobs + cancel** — submit returns immediately; poll for results; cancel
   running tasks (SIGTERM → SIGKILL)
+- **Persistent sessions** — long-lived workspaces with multiple `exec` calls,
+  file upload/download, **snapshots** (fork), and **persistent volumes**;
+  survive worker restart. An E2B-style sandbox model on a process-level core —
+  see [docs/usage.md](docs/usage.md#sessions-persistent-sandboxes)
+- **Streaming stdout (SSE)** — `?stream=true` for live output as a task runs
+- **Per-task disk quota** — `disk_quota_mb` reeds runaway writers
+  (`DiskQuotaExceeded`)
+- **Optional API auth** — `server.api_key` (Bearer); `/health` stays open
 - **HTTP API** — submit, status, cancel, list profiles, reload, Prometheus metrics
 - **Output redaction & readiness** — `stdout`/`stderr` scrubbed of secrets before
   return; `/health` reports which security mechanisms are active

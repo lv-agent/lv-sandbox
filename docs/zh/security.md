@@ -30,6 +30,7 @@
 - 经 `/proc`(`cmdline`/`maps`/`environ`)窥探其他任务。
 - fork 炸弹、fd 耗尽、无限占 CPU(资源上限 + 超时)。
 - 撑爆工作区(资源上限 + 磁盘水位准入 + 可选每任务 `disk_quota_mb` 看门狗:工作区超上限即收割)。
+- **会话文件 I/O 逃逸**——经会话 API 的上传/下载/列目录圈在会话工作区内(拒 `..`/绝对路径);卷仅对 operator 声明的卷目录授予 Landlock 读写。
 - 靠后台进程逃超时(整组清理)。
 - 调用危险 syscall。
 - **发起网络连接**——`socket(AF_INET, …)` 被杀;出站只能经白名单 UDS SOCKS5 代理(profile 按需开启)。

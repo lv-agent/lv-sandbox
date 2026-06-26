@@ -46,6 +46,10 @@ in `pre_exec` after environment capability detection):
 - Filling the workspace (resource limits + disk watermark admission + opt-in
   per-task `disk_quota_mb` watchdog that reaps a task whose workspace exceeds
   the cap).
+- **Session file-I/O escape** — uploads/downloads/listing via the session API
+  are confined to the session workspace (`..`/absolute paths rejected); a
+  volume is granted read-write by Landlock only for the operator-declared
+  volume directory.
 - Escaping timeouts via background processes (whole-group cleanup).
 - Calling dangerous syscalls.
 - **Making network connections** — `socket(AF_INET, …)` is killed; egress is
