@@ -19,15 +19,15 @@ The image ships `libseccomp2`, a non-root user (uid 10000) and a default config 
 **Option A: pull from ghcr.io (fastest)**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.1
-docker tag ghcr.io/lv-agent/lv-sandbox:v0.2.1 lv-sandbox:0.2.1   # optional, to reuse the commands below
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker tag ghcr.io/lv-agent/lv-sandbox:v0.3.0 lv-sandbox:0.3.0   # optional, to reuse the commands below
 ```
 
 **Option B: build locally**
 
 ```bash
 # build the image
-docker build -t lv-sandbox:0.2.1 .
+docker build -t lv-sandbox:0.3.0 .
 
 # or one command that also produces a binary tar.gz (fallback for non-Docker hosts)
 bash scripts/build-release.sh
@@ -43,7 +43,7 @@ docker run -d --name sandbox \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 \
   --user 10000:10000 \
-  lv-sandbox:0.2.1
+  lv-sandbox:0.3.0
 ```
 
 Notes:

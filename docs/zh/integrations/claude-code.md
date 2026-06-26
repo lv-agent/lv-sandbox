@@ -18,7 +18,7 @@ docker run -d --name sandbox -p 8080:8080 \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.2.1
+  ghcr.io/lv-agent/lv-sandbox:v0.3.0
 curl http://127.0.0.1:8080/health   # → {"status":"ok", ...}
 ```
 

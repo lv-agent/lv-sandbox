@@ -18,7 +18,7 @@ privilege-escalation attempts.
 
 ## Status
 
-> **v0.2.1 — early, not security-audited.** lv-sandbox is a young open-source
+> **v0.3.0 — early, not security-audited.** lv-sandbox is a young open-source
 > project with no external security audit. Decide fit using the threat model in
 > [security.md](docs/security.md).
 
@@ -83,14 +83,14 @@ a single worker — fast cold-start, low overhead, high throughput.
 **Docker (recommended)**:
 
 ```bash
-# Pull the published image (or build locally: docker build -t lv-sandbox:0.2.1 .)
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.1
+# Pull the published image (or build locally: docker build -t lv-sandbox:0.3.0 .)
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.2.1
+  ghcr.io/lv-agent/lv-sandbox:v0.3.0
 # (production: use a host volume for /sandboxes and chown it 10000:10000 — see docs/usage.md)
 ```
 

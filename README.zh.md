@@ -6,7 +6,7 @@
 
 ## 状态
 
-> **v0.2.1 —— 早期版本,未做外部安全审计。** lv-sandbox 是一个年轻的开源项目,
+> **v0.3.0 —— 早期版本,未做外部安全审计。** lv-sandbox 是一个年轻的开源项目,
 > 尚未经过外部安全审计。请对照 [security.md](docs/security.md) 的威胁模型判断是否适用。
 
 **适用** —— 运行 AI Agent 生成的命令,需要内核级失败半径控制又不想"一任务一容器";
@@ -40,14 +40,14 @@ lv-sandbox 在**一个** worker 内叠加 Landlock + seccomp + cgroup —— 是
 **Docker（推荐）**：
 
 ```bash
-# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.2.1 .）
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.2.1
+# 拉取官方镜像（或本地 docker build -t lv-sandbox:0.3.0 .）
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
 docker run -d --name sandbox -p 8080:8080 \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1g \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.2.1
+  ghcr.io/lv-agent/lv-sandbox:v0.3.0
 # (生产环境:给 /sandboxes 用 host 卷并 chown 10000:10000,见 docs/zh/usage.md)
 ```
 

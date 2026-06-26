@@ -1,6 +1,6 @@
 name: release
 # 打 v* tag 自动发版：构建镜像推 ghcr.io + 二进制 tar.gz 发 GitHub Release
-# 用法：git tag v0.2.1 && git push github v0.2.1
+# 用法：git tag v0.3.0 && git push github v0.3.0
 # GitHub runner 自带 docker/buildx 且 docker.io 可达，本地踩的坑在此不存在
 
 on:
@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 v0.2.1）'
+        description: '版本号（如 v0.3.0）'
         required: true
-        default: 'v0.2.1'
+        default: 'v0.3.0'
 
 env:
   REGISTRY: ghcr.io

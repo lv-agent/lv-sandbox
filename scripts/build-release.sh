@@ -16,12 +16,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-# 版本：参数 > Cargo.toml [workspace.package].version > 默认 0.2.1
+# 版本：参数 > Cargo.toml [workspace.package].version > 默认 0.3.0
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
     VERSION="$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' Cargo.toml)"
 fi
-VERSION="${VERSION:-0.2.1}"
+VERSION="${VERSION:-0.3.0}"
 
 IMAGE="${IMAGE:-lv-sandbox}"
 ARCH="$(uname -m)"
