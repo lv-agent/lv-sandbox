@@ -73,9 +73,9 @@ impl Scheduler {
         }
     }
 
-    /// cr-021: 注入审计 logger(builder,main 用)。
-    pub fn with_audit(mut self, logger: crate::audit::AuditLogger) -> Self {
-        self.audit = Arc::new(logger);
+    /// cr-021: 注入审计 logger(builder,main 用)。cr-026: 收 Arc 以便与 SessionManager 共享。
+    pub fn with_audit(mut self, logger: Arc<crate::audit::AuditLogger>) -> Self {
+        self.audit = logger;
         self
     }
 
@@ -548,7 +548,7 @@ mod tests {
     async fn audit_records_started_and_completed_events() {
         let tmp = tempfile::tempdir().unwrap();
         let audit_path = tmp.path().join("audit.jsonl");
-        let logger = crate::audit::AuditLogger::file(&audit_path).unwrap();
+        let logger = Arc::new(crate::audit::AuditLogger::file(&audit_path).unwrap());
 
         let runner = make_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10).with_audit(logger);
@@ -641,7 +641,7 @@ mod tests {
     async fn audit_logs_disk_quota_exceeded_as_jobkilled() {
         let tmp = tempfile::tempdir().unwrap();
         let audit_path = tmp.path().join("audit.jsonl");
-        let logger = crate::audit::AuditLogger::file(&audit_path).unwrap();
+        let logger = Arc::new(crate::audit::AuditLogger::file(&audit_path).unwrap());
 
         let runner = make_quota_runner(tmp.path()).await;
         let scheduler = Scheduler::new(Arc::new(runner), 10).with_audit(logger);

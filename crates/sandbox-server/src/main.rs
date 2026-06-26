@@ -10,6 +10,7 @@ use sandbox_core::sandbox_context::SandboxRunner;
 use sandbox_server::api::AppState;
 use sandbox_server::config::AppConfig;
 use sandbox_server::scheduler::Scheduler;
+use sandbox_server::session::SessionManager;
 
 use tracing_subscriber::EnvFilter;
 
@@ -83,25 +84,27 @@ async fn main() -> anyhow::Result<()> {
     }
     let runner = Arc::new(runner);
 
-    // 4. 初始化 Scheduler（cr-021: 按配置注入审计 logger）
-    let audit = if config.server.audit.enabled {
+    // 4. 初始化 Scheduler + SessionManager（cr-021 审计 logger;cr-026 共享 runner + audit）
+    let audit: Arc<sandbox_server::audit::AuditLogger> = if config.server.audit.enabled {
         match sandbox_server::audit::AuditLogger::file(std::path::Path::new(&config.server.audit.path)) {
-            Ok(l) => l,
+            Ok(l) => Arc::new(l),
             Err(e) => {
                 tracing::warn!(error = %e, "audit logger init failed, using noop");
-                sandbox_server::audit::AuditLogger::noop()
+                Arc::new(sandbox_server::audit::AuditLogger::noop())
             }
         }
     } else {
-        sandbox_server::audit::AuditLogger::noop()
+        Arc::new(sandbox_server::audit::AuditLogger::noop())
     };
     let scheduler = Arc::new(
-        Scheduler::new(runner, config.server.max_concurrent_jobs).with_audit(audit),
+        Scheduler::new(runner.clone(), config.server.max_concurrent_jobs).with_audit(audit.clone()),
     );
+    let sessions = Arc::new(SessionManager::new(runner, audit));
 
     // 5. 构建 HTTP 路由
     let state = AppState {
         scheduler: scheduler.clone(),
+        sessions,
         config_path: std::path::PathBuf::from(&config_path),
         api_key: config.server.api_key.clone(),
     };

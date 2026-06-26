@@ -12,7 +12,9 @@ use tower::ServiceExt;
 use sandbox_core::job::JobRequest;
 use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
 use sandbox_server::api::{app, AppState};
+use sandbox_server::audit::AuditLogger;
 use sandbox_server::scheduler::Scheduler;
+use sandbox_server::session::SessionManager;
 
 /// 创建完整的 HTTP 测试 app（默认 max_concurrent=10）
 pub async fn create_test_app() -> (tempfile::TempDir, Router) {
@@ -29,9 +31,12 @@ pub async fn create_test_app_with_concurrency(max: usize) -> (tempfile::TempDir,
     let runner = SandboxRunner::new(&config)
         .await
         .expect("failed to create runner");
-    let scheduler = Arc::new(Scheduler::new(Arc::new(runner), max));
+    let runner = Arc::new(runner);
+    let scheduler = Arc::new(Scheduler::new(runner.clone(), max));
+    let sessions = Arc::new(SessionManager::new(runner, Arc::new(AuditLogger::noop())));
     let state = AppState {
         scheduler,
+        sessions,
         config_path: std::path::PathBuf::new(),
         api_key: None,
     };
@@ -53,9 +58,12 @@ pub async fn create_test_app_with_profiles(
     for profile in profiles {
         runner.register_profile(profile);
     }
-    let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+    let runner = Arc::new(runner);
+    let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+    let sessions = Arc::new(SessionManager::new(runner, Arc::new(AuditLogger::noop())));
     let state = AppState {
         scheduler,
+        sessions,
         config_path: std::path::PathBuf::new(),
         api_key: None,
     };

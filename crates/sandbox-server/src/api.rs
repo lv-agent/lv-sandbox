@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Query, Request, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
@@ -25,10 +26,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use sandbox_core::job::StreamEvent;
 
 use crate::scheduler::Scheduler;
+use crate::session::SessionManager;
 
 /// 应用共享状态
 pub struct AppState {
     pub scheduler: Arc<Scheduler>,
+    /// cr-026: 会话管理器
+    pub sessions: Arc<SessionManager>,
     /// 配置文件路径，供 /api/v1/reload 重新加载
     pub config_path: PathBuf,
     /// cr-023: Bearer API key(None = 鉴权关)
@@ -48,7 +52,21 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/reload", post(reload))
+        // cr-026: 会话 + 文件 I/O
+        .route("/api/v1/sessions", post(create_session).get(list_sessions))
+        .route(
+            "/api/v1/sessions/{id}",
+            get(get_session).delete(destroy_session),
+        )
+        .route("/api/v1/sessions/{id}/exec", post(exec_session))
+        .route("/api/v1/sessions/{id}/files", get(list_files))
+        .route(
+            "/api/v1/sessions/{id}/files/{*path}",
+            get(get_file).put(put_file).delete(delete_file),
+        )
         .layer(middleware::from_fn_with_state(api_key, require_api_key))
+        // cr-026: 放宽 body 上限供文件上传(默认 2MB 太小);JSON 端点不受影响(体小)
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(Arc::new(state))
 }
 
@@ -498,6 +516,232 @@ fn parse_duration(s: &str) -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
+// ==================== cr-026: 会话 + 文件 I/O ====================
+
+/// cr-026: CoreError → HTTP 状态(404 not found / 400 路径违规 / 500 其他)。
+fn core_err_response(e: &sandbox_core::error::CoreError) -> Response {
+    use sandbox_core::error::CoreError;
+    let (code, msg) = match e {
+        CoreError::Io(ioe) if ioe.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, e.to_string())
+        }
+        CoreError::Workspace(m) if m.contains("not found") => (StatusCode::NOT_FOUND, m.clone()),
+        CoreError::Workspace(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        CoreError::ProfileNotFound(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    (code, Json(ErrorResponse { error: msg })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSessionRequest {
+    profile_name: String,
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateSessionResponse {
+    session_id: String,
+}
+
+async fn create_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Response {
+    match state
+        .sessions
+        .create_session(&req.profile_name, req.env.unwrap_or_default())
+    {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(CreateSessionResponse { session_id: id }),
+        )
+            .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({ "sessions": state.sessions.list_sessions() }))
+}
+
+async fn get_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.sessions.get_session(&id) {
+        Some(info) => Json(info).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("session not found: {id}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DestroySessionResponse {
+    ok: bool,
+    session_id: String,
+}
+
+async fn destroy_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.sessions.destroy_session(&id) {
+        Ok(()) => Json(DestroySessionResponse { ok: true, session_id: id }).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecSessionRequest {
+    argv: Vec<String>,
+    timeout: Option<String>,
+    stdin: Option<String>,
+    #[serde(default)]
+    custom_env: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn exec_session(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<StreamQuery>,
+    Path(id): Path<String>,
+    Json(req): Json<ExecSessionRequest>,
+) -> Response {
+    let timeout = match req.timeout.as_deref() {
+        Some(t) => match parse_duration(t) {
+            Some(d) => Some(d),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("invalid timeout format: {t}"),
+                    }),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let job_req = sandbox_core::job::JobRequest {
+        job_id: format!("session:{id}"),
+        argv: req.argv,
+        profile_name: String::new(), // 会话 exec 用绑定 profile,此项忽略
+        timeout,
+        custom_env: req.custom_env.unwrap_or_default(),
+        stdin_data: req.stdin.map(|s| s.into_bytes()),
+    };
+
+    // cr-026: 流式 → SSE(复用 cr-024 事件映射)
+    if q.stream.unwrap_or(false) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+        let sessions = state.sessions.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let sid = id.clone();
+        tokio::spawn(async move {
+            let _ = sessions.exec_session(&sid, job_req, cancel, Some(tx)).await;
+        });
+        let stream = ReceiverStream::new(rx)
+            .map(|ev| -> Result<Event, std::convert::Infallible> {
+                Ok(match ev {
+                    StreamEvent::Started { job_id } => Event::default()
+                        .event("started")
+                        .json_data(serde_json::json!({ "job_id": job_id }))
+                        .unwrap_or_default(),
+                    StreamEvent::Stdout { data } => Event::default()
+                        .event("stdout")
+                        .json_data(serde_json::json!({ "data": data }))
+                        .unwrap_or_default(),
+                    StreamEvent::Result(r) => Event::default()
+                        .event("result")
+                        .json_data(&r)
+                        .unwrap_or_default(),
+                })
+            });
+        return Sse::new(stream).into_response();
+    }
+
+    // 非流式 → 等结果(复用 JobResponse 形状 + 脱敏)
+    match state
+        .sessions
+        .exec_session(&id, job_req, tokio_util::sync::CancellationToken::new(), None)
+        .await
+    {
+        Ok(r) => Json(JobResponse {
+            job_id: r.job_id,
+            status: format!("{:?}", r.status),
+            exit_code: r.exit_code,
+            signal: r.signal,
+            stdout: Some(crate::redact::redact(&String::from_utf8_lossy(&r.stdout))),
+            stderr: Some(crate::redact::redact(&String::from_utf8_lossy(&r.stderr))),
+            duration_ms: Some(r.duration.as_millis() as u64),
+            timed_out: Some(r.timed_out),
+        })
+        .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListFilesQuery {
+    path: Option<String>,
+}
+
+async fn list_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ListFilesQuery>,
+) -> Response {
+    match state
+        .sessions
+        .list_files(&id, q.path.as_deref().unwrap_or(""))
+    {
+        Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn put_file(
+    State(state): State<Arc<AppState>>,
+    Path((id, path)): Path<(String, String)>,
+    bytes: Bytes,
+) -> Response {
+    match state.sessions.put_file(&id, &path, &bytes) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn get_file(
+    State(state): State<Arc<AppState>>,
+    Path((id, path)): Path<(String, String)>,
+) -> Response {
+    match state.sessions.get_file(&id, &path) {
+        Ok(data) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            data,
+        )
+            .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn delete_file(
+    State(state): State<Arc<AppState>>,
+    Path((id, path)): Path<(String, String)>,
+) -> Response {
+    match state.sessions.delete_file(&id, &path) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,15 +750,25 @@ mod tests {
     use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
     use tower::ServiceExt;
 
+    /// cr-026: 测试用——从 runner 建 SessionManager(noop audit)。
+    fn build_sessions(runner: Arc<SandboxRunner>) -> Arc<SessionManager> {
+        Arc::new(SessionManager::new(
+            runner,
+            Arc::new(crate::audit::AuditLogger::noop()),
+        ))
+    }
+
     async fn make_app(tmp: &std::path::Path) -> Router {
         let config = SandboxConfig {
             sandbox_base_dir: tmp.to_path_buf(),
             disk_watermark_bytes: 0,
         };
         let runner = Arc::new(SandboxRunner::new(&config).await.unwrap());
-        let scheduler = Arc::new(Scheduler::new(runner, 10));
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         app(AppState {
             scheduler,
+            sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
         })
@@ -527,9 +781,11 @@ mod tests {
             disk_watermark_bytes: 0,
         };
         let runner = Arc::new(SandboxRunner::new(&config).await.unwrap());
-        let scheduler = Arc::new(Scheduler::new(runner, 10));
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         app(AppState {
             scheduler,
+            sessions,
             config_path: std::path::PathBuf::new(),
             api_key: key.map(String::from),
         })
@@ -684,6 +940,126 @@ mod tests {
         assert!(text.contains("line1"), "stdout missing line1: {text}");
     }
 
+    // ==================== cr-026: 会话 + 文件 I/O 端到端 ====================
+
+    async fn create_test_session(app: Router) -> String {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"profile_name":"shell"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let bod = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bod)
+            .unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn session_roundtrip_upload_exec_download_destroy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        // 上传
+        let put = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/hello.txt"))
+                    .header("content-type", "application/octet-stream")
+                    .body(Body::from(&b"from file"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::OK);
+
+        // exec 读同一文件(证明持久工作区)
+        let exec = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{sid}/exec"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"argv":["/bin/cat","hello.txt"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exec.status(), StatusCode::OK);
+        let eb = axum::body::to_bytes(exec.into_body(), 8192).await.unwrap();
+        let ej: serde_json::Value = serde_json::from_slice(&eb).unwrap();
+        assert!(
+            ej["stdout"].as_str().unwrap().contains("from file"),
+            "exec stdout: {ej}"
+        );
+
+        // 下载
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/sessions/{sid}/files/hello.txt"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::OK);
+        let gb = axum::body::to_bytes(get.into_body(), 8192).await.unwrap();
+        assert_eq!(&gb[..], b"from file");
+
+        // 销毁
+        let del = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/sessions/{sid}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn session_file_traversal_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        // URL 编码的 .. → axum 解码为 .. → sanitize 拒 → 400
+        let put = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/%2e%2e/evil"))
+                    .body(Body::from(&b"x"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            put.status() == StatusCode::BAD_REQUEST || put.status() == StatusCode::NOT_FOUND,
+            "traversal should be rejected, got {}",
+            put.status()
+        );
+    }
+
     #[tokio::test]
     async fn profiles_returns_builtin_list() {
         let tmp = tempfile::tempdir().unwrap();
@@ -786,9 +1162,12 @@ mod tests {
             disk_quota_mb: Some(50),
             ..sandbox_core::profile::SandboxProfile::shell()
         });
-        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let runner = Arc::new(runner);
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         app(AppState {
             scheduler,
+            sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
         })
@@ -850,9 +1229,12 @@ profiles:
         })
         .await
         .unwrap();
-        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let runner = Arc::new(runner);
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         let app = app(AppState {
             scheduler,
+            sessions,
             config_path: config_path.clone(),
             api_key: None,
         });
@@ -907,9 +1289,12 @@ profiles:
         })
         .await
         .unwrap();
-        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let runner = Arc::new(runner);
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         let app = app(AppState {
             scheduler,
+            sessions,
             config_path: config_path.clone(),
             api_key: None,
         });
@@ -1015,9 +1400,12 @@ profiles:
             }],
             ..sandbox_core::profile::SandboxProfile::python()
         });
-        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 10));
+        let runner = Arc::new(runner);
+        let scheduler = Arc::new(Scheduler::new(runner.clone(), 10));
+        let sessions = build_sessions(runner);
         let app = app(AppState {
             scheduler,
+            sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
         });
