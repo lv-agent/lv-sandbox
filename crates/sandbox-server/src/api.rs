@@ -68,6 +68,9 @@ pub fn app(state: AppState) -> Router {
         // cr-027: 快照
         .route("/api/v1/snapshots", get(list_snapshots))
         .route("/api/v1/snapshots/{id}", delete(destroy_snapshot))
+        // cr-028: 卷
+        .route("/api/v1/volumes", post(create_volume).get(list_volumes))
+        .route("/api/v1/volumes/{name}", delete(destroy_volume))
         .layer(middleware::from_fn_with_state(api_key, require_api_key))
         // cr-026: 放宽 body 上限供文件上传(默认 2MB 太小);JSON 端点不受影响(体小)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
@@ -792,6 +795,41 @@ async fn destroy_snapshot(
     }
 }
 
+// ==================== cr-028: 卷 ====================
+
+#[derive(Debug, Deserialize)]
+struct CreateVolumeRequest {
+    name: String,
+}
+
+async fn create_volume(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateVolumeRequest>,
+) -> Response {
+    match state.sessions.create_volume(&req.name) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "volume_name": req.name })),
+        )
+            .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn list_volumes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({ "volumes": state.sessions.list_volumes().unwrap_or_default() }))
+}
+
+async fn destroy_volume(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Response {
+    match state.sessions.cleanup_volume(&name) {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "volume_name": name })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,6 +1239,69 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/api/v1/snapshots/{snap_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dr.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn volumes_crud_via_http() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        // create volume
+        let cr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/volumes")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"data"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cr.status(), StatusCode::CREATED);
+        // list
+        let lr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/volumes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let lb = axum::body::to_bytes(lr.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&lb).contains("data"), "list: {}", String::from_utf8_lossy(&lb));
+        // create session mounting the volume(验证 volumes 字段被接受)
+        let sr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"profile_name":"shell","volumes":[{"name":"data","mount":"volumes/data"}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sr.status(), StatusCode::CREATED);
+        // delete volume
+        let dr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/volumes/data")
                     .body(Body::empty())
                     .unwrap(),
             )
