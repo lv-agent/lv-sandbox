@@ -324,8 +324,10 @@ Notes:
 - File paths are confined to the session workspace (`..`/absolute rejected).
 - Every exec runs under the full sandbox profile (landlock/seccomp/cgroup/
   timeout/cancel/quota) — same as one-shot jobs.
-- Sessions are cleaned on explicit `DELETE`, or on worker startup if left by a
-  crash (no background TTL reaper yet).
+- Sessions **survive worker restart**: their state (workspace + bound profile)
+  is rebuilt on startup, so a session id stays usable after a restart
+  (reconnect). Snapshots and volumes also survive restart.
+- There is no background TTL reaper yet — clean up with an explicit `DELETE`.
 
 ### Snapshots (fork a session)
 

@@ -290,7 +290,8 @@ curl -X DELETE "http://127.0.0.1:8080/api/v1/sessions/$SID"
 - 会话内 exec **串行**(一次一个)。
 - 文件路径圈在会话工作区内(拒 `..`/绝对路径)。
 - 每次 exec 跑在全 profile 约束下(landlock/seccomp/cgroup/timeout/cancel/quota)——与一次性 job 同。
-- 会话在显式 `DELETE` 时清理;崩溃残留则 worker 启动时清(暂无后台 TTL reaper)。
+- 会话**跨 worker 重启存活**:状态(工作区 + 绑定 profile)启动时重建,session id 重启后仍可用(重连)。快照与卷同样跨重启。
+- 暂无后台 TTL reaper——用显式 `DELETE` 清理。
 
 ### 快照（fork 会话）
 
