@@ -144,6 +144,52 @@ impl WorkspaceManager {
         }
         Ok(cleaned)
     }
+
+    // ==================== cr-026: 会话工作区 ====================
+
+    /// 创建会话工作区(`base_dir/sessions/{id}/{workspace,tmp,input,output}`)。
+    /// 与一次性 job 目录隔离(命名空间 sessions/),跨 exec 持久。
+    pub fn create_session_workspace(&self, id: &str) -> Result<JobWorkspace, CoreError> {
+        let base = self.base_dir.join("sessions").join(id);
+        std::fs::create_dir_all(base.join("workspace"))?;
+        std::fs::create_dir_all(base.join("tmp"))?;
+        std::fs::create_dir_all(base.join("input"))?;
+        std::fs::create_dir_all(base.join("output"))?;
+        Ok(JobWorkspace {
+            root: base.clone(),
+            workspace: base.join("workspace"),
+            tmp: base.join("tmp"),
+            input: base.join("input"),
+            output: base.join("output"),
+        })
+    }
+
+    /// 清理会话工作区。
+    pub fn cleanup_session(&self, id: &str) -> Result<(), CoreError> {
+        let path = self.base_dir.join("sessions").join(id);
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+        }
+        Ok(())
+    }
+
+    /// 列出所有会话 id(启动 recovery / 列会话用)。
+    pub fn list_sessions(&self) -> Result<Vec<String>, CoreError> {
+        let dir = self.base_dir.join("sessions");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    ids.push(name.to_string());
+                }
+            }
+        }
+        Ok(ids)
+    }
 }
 
 /// 递归计算目录总大小(cr-022: 看门狗测量用,故 pub)
@@ -163,6 +209,86 @@ pub fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+// ==================== cr-026: 文件 I/O(会话工作区) ====================
+
+/// 目录条目(list_files 返回)。
+#[derive(Debug, Clone, Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+/// cr-026: 规范化相对路径,圈在 base 内。拒空、绝对路径、含 `..`(ParentDir 组件)。
+/// 注:不解析符号链接(v1 限制);文件 I/O 由 API 侧发起(可信调用方)。
+pub fn sanitize_relpath(base: &Path, rel: &str) -> Result<PathBuf, CoreError> {
+    if rel.is_empty() {
+        return Err(CoreError::Workspace("empty path".to_string()));
+    }
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        return Err(CoreError::Workspace(format!(
+            "absolute path not allowed: {rel}"
+        )));
+    }
+    if p
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(CoreError::Workspace(format!(
+            "parent-dir not allowed: {rel}"
+        )));
+    }
+    Ok(base.join(p))
+}
+
+/// 上传文件(自动建父目录)。
+pub fn put_file(base: &Path, rel: &str, data: &[u8]) -> Result<(), CoreError> {
+    let path = sanitize_relpath(base, rel)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, data)?;
+    Ok(())
+}
+
+/// 读取文件(不存在 → Err)。
+pub fn get_file(base: &Path, rel: &str) -> Result<Vec<u8>, CoreError> {
+    let path = sanitize_relpath(base, rel)?;
+    Ok(std::fs::read(path)?)
+}
+
+/// 列目录(返回条目)。空 rel = base 根目录。
+pub fn list_files(base: &Path, rel: &str) -> Result<Vec<FileEntry>, CoreError> {
+    let dir = if rel.is_empty() {
+        base.to_path_buf()
+    } else {
+        sanitize_relpath(base, rel)?
+    };
+    let mut entries = Vec::new();
+    for e in std::fs::read_dir(&dir)? {
+        let e = e?;
+        let md = e.metadata()?;
+        entries.push(FileEntry {
+            name: e.file_name().to_string_lossy().into_owned(),
+            size: md.len(),
+            is_dir: md.is_dir(),
+        });
+    }
+    Ok(entries)
+}
+
+/// 删除文件或目录。
+pub fn delete_file(base: &Path, rel: &str) -> Result<(), CoreError> {
+    let path = sanitize_relpath(base, rel)?;
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 /// 单个 job 的工作空间路径
