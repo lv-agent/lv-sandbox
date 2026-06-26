@@ -59,7 +59,7 @@ impl SandboxRunner {
             .await
     }
 
-    /// cr-018: 带 cancel 的任务执行。cancel 触发时杀进程组（SIGTERM→SIGKILL），返回 Cancelled。
+    /// cr-018: 带 cancel 的任务执行(一次性:水位准入 → 查 profile → 建工作区 → 执行 → 清理)。
     pub async fn run_job_with_cancel(
         &self,
         request: JobRequest,
@@ -67,25 +67,45 @@ impl SandboxRunner {
         // cr-024: 流式 stdout sink。None = 不流式(默认,read_to_end)。
         stdout_sink: Option<mpsc::Sender<StreamEvent>>,
     ) -> Result<JobResult, CoreError> {
-        let start = tokio::time::Instant::now();
-
-        // 0. 磁盘水位检查
+        // 0. 磁盘水位准入
         if !self.workspace_mgr.check_disk_watermark()? {
             return Err(CoreError::Workspace(
                 "disk free below watermark, rejecting new job".to_string(),
             ));
         }
-
         // 1. 查找 profile
         let profile = self
             .profile_registry
             .get(&request.profile_name)
             .ok_or_else(|| CoreError::ProfileNotFound(request.profile_name.clone()))?
             .clone();
+        // 2. 建一次性工作区
+        let job_id = request.job_id.clone();
+        let workspace = self.workspace_mgr.create_job_workspace(&request.job_id)?;
+        // 3. 执行(cr-026: 提取的原语 run_in_workspace,不建/不清理工作区)
+        let result = self
+            .run_in_workspace(&workspace, &profile, request, cancel, stdout_sink)
+            .await;
+        // 4. 清理(无论成败)
+        let _ = self.workspace_mgr.cleanup_job(&job_id);
+        result
+    }
+
+    /// cr-026: 执行原语——在**给定工作区**里跑一条命令,套全套安全约束(landlock/seccomp/
+    /// cgroup/timeout/cancel/quota/stream),但**不创建/不清理工作区**(工作区生命周期由调用者
+    /// 管:一次性 run_job_with_cancel 建与清;会话 exec 用持久工作区)。profile 由参数传入(会话建时绑)。
+    async fn run_in_workspace(
+        &self,
+        job_workspace: &crate::workspace::JobWorkspace,
+        profile: &SandboxProfile,
+        request: JobRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        stdout_sink: Option<mpsc::Sender<StreamEvent>>,
+    ) -> Result<JobResult, CoreError> {
+        let start = tokio::time::Instant::now();
         let timeout = request.timeout.unwrap_or(profile.default_timeout);
 
-        // 2. 构建 sanitized env
-        let job_workspace = self.workspace_mgr.create_job_workspace(&request.job_id)?;
+        // sanitized env(profile.env baseline)
         let mut env = build_sanitized_env(
             &request.job_id,
             &job_workspace.root,
@@ -181,10 +201,9 @@ impl SandboxRunner {
         }
 
         if bytes_read > 0 {
-            // pre_exec 失败：子进程已 _exit
+            // pre_exec 失败：子进程已 _exit（工作区由调用者清理:一次性 wrapper / 会话 destroy）
             let error = crate::process::PreExecError::from_byte(error_buf[0]);
             let _ = child.wait().await;
-            let _ = self.workspace_mgr.cleanup_job(&request.job_id);
             if let Some(cg) = cgroup {
                 let _ = cg.destroy();
             }
@@ -287,7 +306,7 @@ impl SandboxRunner {
             let mut interval = tokio::time::interval(DISK_QUOTA_POLL);
             loop {
                 interval.tick().await;
-                let dir = self.workspace_mgr.base_dir().join(&request.job_id);
+                let dir = job_workspace.root.clone();
                 let size = tokio::task::spawn_blocking(move || crate::workspace::dir_size(&dir))
                     .await
                     .unwrap_or(0);
@@ -356,7 +375,7 @@ impl SandboxRunner {
             vec![]
         };
 
-        // 15. 清理 cgroup + workspace
+        // 15. 清理 cgroup + 代理(工作区由调用者管:一次性 wrapper 或会话 destroy)
         if let Some(cg) = cgroup {
             let _ = cg.destroy();
         }
@@ -364,7 +383,6 @@ impl SandboxRunner {
         if let Some(proxy) = job_proxy {
             proxy.stop().await;
         }
-        let _ = self.workspace_mgr.cleanup_job(&request.job_id);
 
         // 16. 构建结果
         let result = JobResult {
