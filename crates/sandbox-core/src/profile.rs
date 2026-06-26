@@ -35,6 +35,8 @@ pub struct SandboxProfile {
     pub disk_quota_mb: Option<u64>,
     /// cr-025: template baseline 环境变量(覆盖核心非保护项;HOME/TMPDIR 保护)。
     pub env: HashMap<String, String>,
+    /// cr-028: 额外可写路径(卷等,landlock ReadWrite)。默认空。
+    pub extra_writable_paths: Vec<PathBuf>,
 }
 
 impl SandboxProfile {
@@ -72,6 +74,7 @@ impl SandboxProfile {
             egress_allowlist: vec![],
             disk_quota_mb: None,
             env: HashMap::new(),
+            extra_writable_paths: vec![],
         }
     }
 
@@ -104,6 +107,7 @@ impl SandboxProfile {
             egress_allowlist: vec![],
             disk_quota_mb: None,
             env: HashMap::new(),
+            extra_writable_paths: vec![],
         }
     }
 
@@ -136,6 +140,7 @@ impl SandboxProfile {
             egress_allowlist: vec![],
             disk_quota_mb: None,
             env: HashMap::new(),
+            extra_writable_paths: vec![],
         }
     }
 }

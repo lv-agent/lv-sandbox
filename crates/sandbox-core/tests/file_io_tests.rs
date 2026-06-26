@@ -100,3 +100,17 @@ fn snapshot_create_restore_list_cleanup() {
     m.cleanup_snapshot("snap1").unwrap();
     assert!(!m.list_snapshots().unwrap().contains(&"snap1".to_string()));
 }
+
+// ==================== cr-028: 卷 ====================
+
+#[test]
+fn volume_create_list_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = WorkspaceManager::new(tmp.path(), 0);
+    m.create_volume("data").unwrap();
+    assert!(m.list_volumes().unwrap().contains(&"data".to_string()));
+    let p = m.volume_path("data");
+    assert!(p.starts_with(tmp.path().join("volumes")));
+    m.cleanup_volume("data").unwrap();
+    assert!(!m.list_volumes().unwrap().contains(&"data".to_string()));
+}

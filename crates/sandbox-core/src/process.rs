@@ -83,6 +83,10 @@ impl PreparedSandboxContext {
                     for path in &profile.extra_readonly_paths {
                         policy = policy.add_rule(path, sandbox_landlock::AccessFs::ReadOnly);
                     }
+                    // cr-028: 额外可写路径(卷等)
+                    for path in &profile.extra_writable_paths {
+                        policy = policy.add_rule(path, sandbox_landlock::AccessFs::ReadWrite);
+                    }
 
                     let prepared = sandbox_landlock::PreparedRuleset::prepare(
                         &policy,

@@ -238,6 +238,42 @@ impl WorkspaceManager {
         }
         Ok(())
     }
+
+    // ==================== cr-028: 卷(跨会话持久 rw) ====================
+
+    fn volumes_dir(&self) -> PathBuf {
+        self.base_dir.join("volumes")
+    }
+    pub fn volume_path(&self, name: &str) -> PathBuf {
+        self.volumes_dir().join(name)
+    }
+    pub fn create_volume(&self, name: &str) -> Result<(), CoreError> {
+        std::fs::create_dir_all(self.volume_path(name))?;
+        Ok(())
+    }
+    pub fn list_volumes(&self) -> Result<Vec<String>, CoreError> {
+        let dir = self.volumes_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    ids.push(name.to_string());
+                }
+            }
+        }
+        Ok(ids)
+    }
+    pub fn cleanup_volume(&self, name: &str) -> Result<(), CoreError> {
+        let p = self.volume_path(name);
+        if p.exists() {
+            std::fs::remove_dir_all(p)?;
+        }
+        Ok(())
+    }
 }
 
 /// 递归计算目录总大小(cr-022: 看门狗测量用,故 pub)
