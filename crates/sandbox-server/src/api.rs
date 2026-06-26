@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
@@ -59,11 +59,15 @@ pub fn app(state: AppState) -> Router {
             get(get_session).delete(destroy_session),
         )
         .route("/api/v1/sessions/{id}/exec", post(exec_session))
+        .route("/api/v1/sessions/{id}/snapshot", post(snapshot_session))
         .route("/api/v1/sessions/{id}/files", get(list_files))
         .route(
             "/api/v1/sessions/{id}/files/{*path}",
             get(get_file).put(put_file).delete(delete_file),
         )
+        // cr-027: 快照
+        .route("/api/v1/snapshots", get(list_snapshots))
+        .route("/api/v1/snapshots/{id}", delete(destroy_snapshot))
         .layer(middleware::from_fn_with_state(api_key, require_api_key))
         // cr-026: 放宽 body 上限供文件上传(默认 2MB 太小);JSON 端点不受影响(体小)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
@@ -538,6 +542,9 @@ struct CreateSessionRequest {
     profile_name: String,
     #[serde(default)]
     env: Option<std::collections::HashMap<String, String>>,
+    /// cr-027: 从快照恢复(fork)。None = 空工作区。
+    #[serde(default)]
+    from_snapshot: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -552,7 +559,7 @@ async fn create_session(
     match state.sessions.create_session(
         &req.profile_name,
         req.env.unwrap_or_default(),
-        None,
+        req.from_snapshot,
     ) {
         Ok(id) => (
             StatusCode::CREATED,
@@ -739,6 +746,44 @@ async fn delete_file(
 ) -> Response {
     match state.sessions.delete_file(&id, &path) {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+// ==================== cr-027: 快照 ====================
+
+#[derive(Debug, Serialize)]
+struct SnapshotResponse {
+    snapshot_id: String,
+}
+
+async fn snapshot_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.sessions.snapshot_session(&id).await {
+        Ok(snap_id) => (
+            StatusCode::CREATED,
+            Json(SnapshotResponse {
+                snapshot_id: snap_id,
+            }),
+        )
+            .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+async fn list_snapshots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let ids = state.sessions.list_snapshots().unwrap_or_default();
+    Json(serde_json::json!({ "snapshots": ids }))
+}
+
+async fn destroy_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.sessions.destroy_snapshot(&id) {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "snapshot_id": id })).into_response(),
         Err(e) => core_err_response(&e),
     }
 }
@@ -1059,6 +1104,105 @@ mod tests {
             "traversal should be rejected, got {}",
             put.status()
         );
+    }
+
+    #[tokio::test]
+    async fn session_snapshot_restore_via_http() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        // 上传文件
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/data.txt"))
+                    .body(Body::from(&b"snapshot me"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 快照
+        let sr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{sid}/snapshot"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sr.status(), StatusCode::CREATED);
+        let sb = axum::body::to_bytes(sr.into_body(), 4096).await.unwrap();
+        let snap_id = serde_json::from_slice::<serde_json::Value>(&sb).unwrap()["snapshot_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // list 快照
+        let lr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/snapshots")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let lb = axum::body::to_bytes(lr.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&lb).contains(&snap_id), "list: {}", String::from_utf8_lossy(&lb));
+        // 从快照建新会话
+        let cr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        format!(r#"{{"profile_name":"shell","from_snapshot":"{snap_id}"}}"#),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cr.status(), StatusCode::CREATED);
+        let cb = axum::body::to_bytes(cr.into_body(), 4096).await.unwrap();
+        let sid2 = serde_json::from_slice::<serde_json::Value>(&cb).unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // 新会话含快照文件
+        let dl = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/sessions/{sid2}/files/data.txt"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let db = axum::body::to_bytes(dl.into_body(), 4096).await.unwrap();
+        assert_eq!(&db[..], b"snapshot me");
+        // 删快照
+        let dr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/snapshots/{snap_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dr.status(), StatusCode::OK);
     }
 
     #[tokio::test]
