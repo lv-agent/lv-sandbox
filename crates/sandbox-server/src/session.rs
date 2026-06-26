@@ -56,11 +56,13 @@ impl SessionManager {
         }
     }
 
-    /// 建会话:查 profile → 建持久工作区 → 入表。`env` 合并进绑定 profile.env。
+    /// 建会话:查 profile → 建持久工作区(可从快照恢复)→ 入表。`env` 合并进绑定 profile.env。
+    /// cr-027: `from_snapshot=Some(id)` → 把快照内容拷进新工作区(快照只存 fs;profile/env 此处给)。
     pub fn create_session(
         &self,
         profile_name: &str,
         env: HashMap<String, String>,
+        from_snapshot: Option<String>,
     ) -> Result<String, CoreError> {
         let mut profile = self
             .runner
@@ -75,6 +77,13 @@ impl SessionManager {
 
         let id = uuid::Uuid::new_v4().to_string();
         let workspace = self.runner.workspace_mgr().create_session_workspace(&id)?;
+
+        // cr-027: 从快照恢复(fork)
+        if let Some(snap_id) = &from_snapshot {
+            self.runner
+                .workspace_mgr()
+                .restore_snapshot(snap_id, &workspace.workspace)?;
+        }
 
         self.sessions.write().expect("sessions lock poisoned").insert(
             id.clone(),
@@ -243,5 +252,35 @@ impl SessionManager {
     pub fn delete_file(&self, id: &str, rel: &str) -> Result<(), CoreError> {
         let base = self.workspace_dir(id)?;
         sandbox_core::workspace::delete_file(&base, rel)
+    }
+
+    // ==================== cr-027: 快照(磁盘-only,跨重启存活) ====================
+
+    /// 快照会话:持 exec_lock(等运行中 exec 完成,静默)→ 拷 workspace → 返回 snapshot_id。
+    pub async fn snapshot_session(&self, id: &str) -> Result<String, CoreError> {
+        let (ws_path, exec_lock) = {
+            let guard = self.sessions.read().expect("sessions lock poisoned");
+            let e = guard
+                .get(id)
+                .ok_or_else(|| CoreError::Workspace(format!("session not found: {id}")))?;
+            (e.workspace.workspace.clone(), e.exec_lock.clone())
+        };
+        // cr-027: 持 exec_lock 确保静默(不与运行中 exec 竞态)
+        let _guard = exec_lock.lock().await;
+        let snap_id = uuid::Uuid::new_v4().to_string();
+        self.runner
+            .workspace_mgr()
+            .create_snapshot(&ws_path, &snap_id)?;
+        Ok(snap_id)
+    }
+
+    /// 列所有快照 id(扫盘)。
+    pub fn list_snapshots(&self) -> Result<Vec<String>, CoreError> {
+        self.runner.workspace_mgr().list_snapshots()
+    }
+
+    /// 销毁快照。
+    pub fn destroy_snapshot(&self, id: &str) -> Result<(), CoreError> {
+        self.runner.workspace_mgr().cleanup_snapshot(id)
     }
 }

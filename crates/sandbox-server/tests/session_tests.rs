@@ -35,7 +35,7 @@ fn req(argv: Vec<String>) -> JobRequest {
 #[tokio::test]
 async fn session_exec_shares_workspace_across_calls() {
     let (_tmp, m) = mgr().await;
-    let id = m.create_session("shell", HashMap::new()).unwrap();
+    let id = m.create_session("shell", HashMap::new(), None).unwrap();
     // exec A 写文件
     let r1 = m
         .exec_session(
@@ -71,7 +71,7 @@ async fn session_exec_shares_workspace_across_calls() {
 #[tokio::test]
 async fn session_lifecycle_create_list_get_destroy() {
     let (_tmp, m) = mgr().await;
-    let id = m.create_session("shell", HashMap::new()).unwrap();
+    let id = m.create_session("shell", HashMap::new(), None).unwrap();
     assert!(m.get_session(&id).is_some());
     assert!(m.list_sessions().iter().any(|s| s.session_id == id));
     m.destroy_session(&id).unwrap();
@@ -82,5 +82,42 @@ async fn session_lifecycle_create_list_get_destroy() {
 #[tokio::test]
 async fn create_session_unknown_profile_errors() {
     let (_tmp, m) = mgr().await;
-    assert!(m.create_session("nope", HashMap::new()).is_err());
+    assert!(m.create_session("nope", HashMap::new(), None).is_err());
+}
+
+#[tokio::test]
+async fn snapshot_then_restore_forks_session() {
+    let (_tmp, m) = mgr().await;
+    let id = m.create_session("shell", HashMap::new(), None).unwrap();
+    // exec 写文件
+    m.exec_session(
+        &id,
+        req(vec!["/bin/sh".into(), "-c".into(), "echo forked > f.txt".into()]),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    // 快照
+    let snap = m.snapshot_session(&id).await.unwrap();
+    // 从快照建新会话(fork)
+    let id2 = m.create_session("shell", HashMap::new(), Some(snap.clone())).unwrap();
+    let r = m
+        .exec_session(
+            &id2,
+            req(vec!["/bin/cat".into(), "f.txt".into()]),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&r.stdout).contains("forked"),
+        "forked session should see snapshot file: {:?}",
+        r.stdout
+    );
+    // list / destroy 快照
+    assert!(m.list_snapshots().unwrap().contains(&snap));
+    m.destroy_snapshot(&snap).unwrap();
+    assert!(!m.list_snapshots().unwrap().contains(&snap));
 }

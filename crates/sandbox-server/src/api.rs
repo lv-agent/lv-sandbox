@@ -549,10 +549,11 @@ async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Response {
-    match state
-        .sessions
-        .create_session(&req.profile_name, req.env.unwrap_or_default())
-    {
+    match state.sessions.create_session(
+        &req.profile_name,
+        req.env.unwrap_or_default(),
+        None,
+    ) {
         Ok(id) => (
             StatusCode::CREATED,
             Json(CreateSessionResponse { session_id: id }),
