@@ -182,6 +182,20 @@ curl -N -X POST 'http://127.0.0.1:8080/api/v1/jobs?stream=true' \
   -d '{"job_id":"s","argv":["/bin/sh","-c","for i in 1 2 3; do echo tick $i; sleep 0.2; done"],"profile_name":"shell"}'
 ```
 
+### Interactive terminal (PTY)
+
+Open a WebSocket to `/api/v1/sessions/{id}/tty?argv=/bin/sh` for an interactive
+terminal — stdin/stdout flow bidirectionally over a PTY (raw mode, terminal
+signals). The command runs under the full sandbox profile (same as exec).
+
+```bash
+# via the CLI:
+lvs shell <session-id> -- /bin/sh
+```
+
+The server sends a JSON control message `{"type":"exit",...}` when the process
+exits (or `{"type":"timeout"}`).
+
 ### Output redaction
 
 `stdout`/`stderr` in `GET /jobs/{id}` responses are redacted — common secret

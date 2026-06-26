@@ -168,6 +168,18 @@ curl -N -X POST 'http://127.0.0.1:8080/api/v1/jobs?stream=true' \
   -d '{"job_id":"s","argv":["/bin/sh","-c","for i in 1 2 3; do echo tick $i; sleep 0.2; done"],"profile_name":"shell"}'
 ```
 
+### 交互终端（PTY）
+
+经 WebSocket 连 `/api/v1/sessions/{id}/tty?argv=/bin/sh` 获得交互终端——
+stdin/stdout 经 PTY 双向流(raw 模式、终端信号)。命令跑在全 profile 约束下(同 exec)。
+
+```bash
+# 经 CLI:
+lvs shell <session-id> -- /bin/sh
+```
+
+进程退出时 server 发 JSON 控制消息 `{"type":"exit",...}`(或 `{"type":"timeout"}`)。
+
 ### 输出脱敏
 
 `GET /jobs/{id}` 响应中的 `stdout`/`stderr` 会被脱敏——常见密钥模式（Bearer token、AWS `AKIA` 密钥、GitHub token、PEM 私钥）在返回前替换为 `[REDACTED]`，避免任务误读的凭证（如 `~/.aws/credentials`）泄露进 agent 上下文。
