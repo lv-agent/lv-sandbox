@@ -82,6 +82,14 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => tracing::warn!(profile = %name, error = %e, "invalid profile config, skipping"),
         }
     }
+    // cr-026: 启动崩溃恢复——清孤儿一次性 job 目录 + 孤儿会话目录
+    if let Err(e) = sandbox_core::recovery::recover(&runner) {
+        tracing::warn!(error = %e, "job recovery scan failed");
+    }
+    if let Err(e) = sandbox_core::recovery::recover_sessions(&runner) {
+        tracing::warn!(error = %e, "session recovery scan failed");
+    }
+
     let runner = Arc::new(runner);
 
     // 4. 初始化 Scheduler + SessionManager（cr-021 审计 logger;cr-026 共享 runner + audit）

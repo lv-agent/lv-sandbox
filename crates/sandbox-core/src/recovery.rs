@@ -57,3 +57,39 @@ pub fn recover(runner: &SandboxRunner) -> Result<RecoveryReport, CoreError> {
 
     Ok(report)
 }
+
+/// cr-026: 启动时清理孤儿会话目录(`base_dir/sessions/*`,崩溃残留)。
+pub fn recover_sessions(runner: &SandboxRunner) -> Result<RecoveryReport, CoreError> {
+    let mgr = runner.workspace_mgr();
+    let ids = mgr.list_sessions()?;
+
+    let mut report = RecoveryReport {
+        scanned: ids.len(),
+        cleaned: 0,
+        errors: 0,
+    };
+
+    for id in &ids {
+        match mgr.cleanup_session(id) {
+            Ok(()) => {
+                tracing::info!(session_id = %id, "recovery cleanup: stale session removed");
+                report.cleaned += 1;
+            }
+            Err(e) => {
+                tracing::warn!(session_id = %id, error = %e, "session recovery cleanup failed");
+                report.errors += 1;
+            }
+        }
+    }
+
+    if report.scanned > 0 {
+        tracing::info!(
+            scanned = report.scanned,
+            cleaned = report.cleaned,
+            errors = report.errors,
+            "session crash recovery complete"
+        );
+    }
+
+    Ok(report)
+}

@@ -98,3 +98,20 @@ fn recovery_report_is_serializable() {
     assert!(json.contains("\"cleaned\":3"));
     assert!(json.contains("\"errors\":1"));
 }
+
+/// cr-026: 启动 recovery 清孤儿会话目录。
+#[tokio::test]
+async fn recover_sessions_cleans_orphan_session_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = SandboxConfig {
+        sandbox_base_dir: tmp.path().to_path_buf(),
+        disk_watermark_bytes: 0,
+    };
+    let runner = SandboxRunner::new(&config).await.unwrap();
+    // 预置孤儿会话目录
+    std::fs::create_dir_all(tmp.path().join("sessions").join("orphan").join("workspace")).unwrap();
+    let report = sandbox_core::recovery::recover_sessions(&runner).unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.cleaned, 1);
+    assert!(!tmp.path().join("sessions").join("orphan").exists());
+}
