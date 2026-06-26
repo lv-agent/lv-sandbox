@@ -327,6 +327,30 @@ Notes:
 - Sessions are cleaned on explicit `DELETE`, or on worker startup if left by a
   crash (no background TTL reaper yet).
 
+### Snapshots (fork a session)
+
+A snapshot is a full copy of a session's `workspace/`. Save a prepared
+environment and fork new sessions from it (the snapshot holds files only —
+profile/env are given at restore).
+
+```bash
+SNAP=$(curl -s -X POST http://127.0.0.1:8080/api/v1/sessions/$SID/snapshot | jq -r .snapshot_id)
+curl    http://127.0.0.1:8080/api/v1/snapshots                 # list
+curl -X POST http://127.0.0.1:8080/api/v1/sessions \
+  -H 'content-type: application/json' \
+  -d "{\"profile_name\":\"shell\",\"from_snapshot\":\"$SNAP\"}" # fork
+curl -X DELETE http://127.0.0.1:8080/api/v1/snapshots/$SNAP
+```
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/sessions/{id}/snapshot` | snapshot a session → `{snapshot_id}` |
+| `GET` | `/snapshots` | list |
+| `DELETE` | `/snapshots/{id}` | delete |
+
+Snapshots persist on disk and **survive worker restart**. A snapshot waits for
+any running exec to finish (taken while the session is quiet).
+
 ## MCP integration (Claude Code / Hermes-Agent)
 
 `sandbox-mcp` wraps the sandbox as 4 MCP tools an AI Agent can call directly:

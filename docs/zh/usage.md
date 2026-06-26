@@ -292,6 +292,28 @@ curl -X DELETE "http://127.0.0.1:8080/api/v1/sessions/$SID"
 - 每次 exec 跑在全 profile 约束下(landlock/seccomp/cgroup/timeout/cancel/quota)——与一次性 job 同。
 - 会话在显式 `DELETE` 时清理;崩溃残留则 worker 启动时清(暂无后台 TTL reaper)。
 
+### 快照（fork 会话）
+
+快照是会话 `workspace/` 的整树拷贝。备好环境后保存,再 fork 出新会话(快照只存文件——
+profile/env 在恢复时给)。
+
+```bash
+SNAP=$(curl -s -X POST http://127.0.0.1:8080/api/v1/sessions/$SID/snapshot | jq -r .snapshot_id)
+curl    http://127.0.0.1:8080/api/v1/snapshots                  # 列
+curl -X POST http://127.0.0.1:8080/api/v1/sessions \
+  -H 'content-type: application/json' \
+  -d "{\"profile_name\":\"shell\",\"from_snapshot\":\"$SNAP\"}"  # fork
+curl -X DELETE http://127.0.0.1:8080/api/v1/snapshots/$SNAP
+```
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/sessions/{id}/snapshot` | 快照会话 → `{snapshot_id}` |
+| `GET` | `/snapshots` | 列 |
+| `DELETE` | `/snapshots/{id}` | 删 |
+
+快照落盘,**跨 worker 重启存活**。快照会等运行中 exec 完成(静默时拍)。
+
 ## MCP 集成（Claude Code / Hermes-Agent）
 
 `sandbox-mcp` 把沙箱封装为 4 个 MCP 工具，AI Agent 可直接调用：
