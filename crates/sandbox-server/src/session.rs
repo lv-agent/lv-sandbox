@@ -61,6 +61,8 @@ pub struct SessionManager {
     runner: Arc<SandboxRunner>,
     sessions: Arc<RwLock<HashMap<String, SessionEntry>>>,
     audit: Arc<AuditLogger>,
+    /// cr-031: 生命周期 webhook(默认 noop)
+    webhooks: Arc<crate::webhook::WebhookDispatcher>,
 }
 
 impl SessionManager {
@@ -69,7 +71,14 @@ impl SessionManager {
             runner,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             audit,
+            webhooks: Arc::new(crate::webhook::WebhookDispatcher::noop()),
         }
+    }
+
+    /// cr-031: 注入 webhook 分发器(builder,main 用)。
+    pub fn with_webhooks(mut self, w: Arc<crate::webhook::WebhookDispatcher>) -> Self {
+        self.webhooks = w;
+        self
     }
 
     /// 建会话:查 profile → 建持久工作区(可从快照恢复 / 挂卷)→ 入表。
@@ -218,10 +227,10 @@ impl SessionManager {
             .run_in_workspace(&workspace, &profile, request, cancel, sink)
             .await;
 
-        // 终态审计 + 更新计数
+        // 终态审计 + webhook + 更新计数
         let result = match result {
             Ok(r) => {
-                self.audit.log(crate::audit::AuditEvent::new(
+                let ev = crate::audit::AuditEvent::new(
                     crate::audit::status_to_event_type(&r.status),
                     id,
                     &profile.name,
@@ -230,11 +239,13 @@ impl SessionManager {
                     r.signal,
                     Some(r.duration.as_millis() as u64),
                     crate::audit::status_detail(&r.status),
-                ));
+                );
+                self.webhooks.dispatch(&ev);
+                self.audit.log(ev);
                 r
             }
             Err(e) => {
-                self.audit.log(crate::audit::AuditEvent::new(
+                let ev = crate::audit::AuditEvent::new(
                     crate::audit::AuditEventType::JobFailed,
                     id,
                     &profile.name,
@@ -243,7 +254,9 @@ impl SessionManager {
                     None,
                     None,
                     Some(format!("session exec error: {e}")),
-                ));
+                );
+                self.webhooks.dispatch(&ev);
+                self.audit.log(ev);
                 return Err(e);
             }
         };

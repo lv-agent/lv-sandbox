@@ -59,6 +59,8 @@ pub struct Scheduler {
     jobs: Arc<RwLock<HashMap<String, JobEntry>>>,
     /// cr-021: 审计日志(默认 noop)
     audit: Arc<crate::audit::AuditLogger>,
+    /// cr-031: 生命周期 webhook(默认 noop)
+    webhooks: Arc<crate::webhook::WebhookDispatcher>,
 }
 
 impl Scheduler {
@@ -70,12 +72,19 @@ impl Scheduler {
             start_time: Instant::now(),
             jobs: Arc::new(RwLock::new(HashMap::new())),
             audit: Arc::new(crate::audit::AuditLogger::noop()),
+            webhooks: Arc::new(crate::webhook::WebhookDispatcher::noop()),
         }
     }
 
     /// cr-021: 注入审计 logger(builder,main 用)。cr-026: 收 Arc 以便与 SessionManager 共享。
     pub fn with_audit(mut self, logger: Arc<crate::audit::AuditLogger>) -> Self {
         self.audit = logger;
+        self
+    }
+
+    /// cr-031: 注入 webhook 分发器(builder,main 用)。
+    pub fn with_webhooks(mut self, w: Arc<crate::webhook::WebhookDispatcher>) -> Self {
+        self.webhooks = w;
         self
     }
 
@@ -164,6 +173,7 @@ impl Scheduler {
         let semaphore = self.semaphore.clone();
         let jobs = self.jobs.clone();
         let audit = self.audit.clone();
+        let webhooks = self.webhooks.clone();
         let jid = job_id.clone();
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
@@ -196,7 +206,8 @@ impl Scheduler {
             });
 
             // cr-021: 审计终态
-            audit.log(crate::audit::AuditEvent::new(
+            // cr-021 审计终态 + cr-031 webhook(同一终态事件)
+            let ev = crate::audit::AuditEvent::new(
                 crate::audit::status_to_event_type(&result.status),
                 &jid,
                 &profile,
@@ -205,7 +216,9 @@ impl Scheduler {
                 result.signal,
                 Some(result.duration.as_millis() as u64),
                 crate::audit::status_detail(&result.status),
-            ));
+            );
+            webhooks.dispatch(&ev);
+            audit.log(ev);
 
             if let Some(entry) = jobs.write().expect("jobs lock poisoned").get_mut(&jid) {
                 entry.state = JobState::Done(result);
@@ -254,6 +267,7 @@ impl Scheduler {
         let semaphore = self.semaphore.clone();
         let jobs = self.jobs.clone();
         let audit = self.audit.clone();
+        let webhooks = self.webhooks.clone();
         let jid = job_id.clone();
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
@@ -286,7 +300,8 @@ impl Scheduler {
                 resource_usage: None,
             });
 
-            audit.log(crate::audit::AuditEvent::new(
+            // cr-021 审计终态 + cr-031 webhook(同一终态事件)
+            let ev = crate::audit::AuditEvent::new(
                 crate::audit::status_to_event_type(&result.status),
                 &jid,
                 &profile,
@@ -295,7 +310,9 @@ impl Scheduler {
                 result.signal,
                 Some(result.duration.as_millis() as u64),
                 crate::audit::status_detail(&result.status),
-            ));
+            );
+            webhooks.dispatch(&ev);
+            audit.log(ev);
 
             if let Some(entry) = jobs.write().expect("jobs lock poisoned").get_mut(&jid) {
                 entry.state = JobState::Done(result);
@@ -702,5 +719,33 @@ mod tests {
             matches!(state, Some(JobState::Done(_))),
             "streamed job should register as Done, got {state:?}"
         );
+    }
+
+    /// cr-031: 配 webhook 的 scheduler,job 终态时 POST 事件到 webhook URL。
+    #[tokio::test]
+    async fn webhook_fires_on_job_terminal() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/hook"))
+            .and(body_partial_json(serde_json::json!({"event_type": "JobCompleted"})))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let wh = crate::webhook::WebhookDispatcher::new(vec![format!("{}/hook", server.uri())]);
+        let scheduler = Scheduler::new(Arc::new(runner), 10).with_webhooks(Arc::new(wh));
+
+        scheduler
+            .submit_async(make_async_request("wh-001", &["/bin/echo", "hi"]))
+            .await;
+        let _ = wait_until_done(&scheduler, "wh-001").await;
+        // fire-and-forget;给投递一点时间再校验
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        server.verify().await;
     }
 }

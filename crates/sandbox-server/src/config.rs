@@ -44,6 +44,9 @@ pub struct ServerSection {
     /// cr-023: Bearer API key。None/缺省 = 不鉴权(默认,零行为变化)。
     #[serde(default)]
     pub api_key: Option<String>,
+    /// cr-031: 生命周期 webhook URL 列表。空/缺省 = 不推(默认)。
+    #[serde(default)]
+    pub webhooks: Vec<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -68,6 +71,7 @@ impl Default for ServerSection {
             log_format: default_log_format(),
             audit: AuditConfig::default(),
             api_key: None,
+            webhooks: vec![],
         }
     }
 }

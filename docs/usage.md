@@ -432,6 +432,7 @@ server:
     enabled: false
     path: "/var/log/sandbox/audit.jsonl"
   api_key: "secret-token"       # cr-023: Bearer token; unset = no auth (default)
+  webhooks: []                    # cr-031: lifecycle webhook URLs; empty = off (default)
 
 sandbox:
   base_dir: "/sandboxes"        # task workspace root
@@ -478,6 +479,19 @@ Each line is a self-contained event: `started` / `completed` / `timed_out` /
 `killed` / `cancelled` / `failed`, with `argv`, `exit_code`, `signal`, `duration_ms`.
 The file is operator-side (not returned to agents); protect it like any log that
 may contain commands.
+
+#### Webhooks
+
+Set `server.webhooks` to a list of URLs to receive a `POST` of the terminal
+event (the same AuditEvent JSON: `event_type`, `job_id`/`session_id`, `status`,
+`exit_code`, `argv`, …) whenever a job or session exec finishes — no polling
+needed. Off by default; delivery is async (fire-and-forget, 3 retries). The
+payload includes `argv`, so protect the endpoint like the audit file.
+
+```yaml
+server:
+  webhooks: ["https://your-service/lvsandbox-hook"]
+```
 
 ### Timeout format
 

@@ -102,9 +102,17 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(sandbox_server::audit::AuditLogger::noop())
     };
     let scheduler = Arc::new(
-        Scheduler::new(runner.clone(), config.server.max_concurrent_jobs).with_audit(audit.clone()),
+        Scheduler::new(runner.clone(), config.server.max_concurrent_jobs)
+            .with_audit(audit.clone())
+            .with_webhooks(Arc::new(sandbox_server::webhook::WebhookDispatcher::new(
+                config.server.webhooks.clone(),
+            ))),
     );
-    let sessions = Arc::new(SessionManager::new(runner, audit));
+    let sessions = Arc::new(
+        SessionManager::new(runner, audit).with_webhooks(Arc::new(
+            sandbox_server::webhook::WebhookDispatcher::new(config.server.webhooks.clone()),
+        )),
+    );
     // cr-029: 会话跨重启重连——从盘重建注册表(替代 cr-026 的清理)
     if let Err(e) = sessions.rebuild_from_disk() {
         tracing::warn!(error = %e, "session rebuild failed");

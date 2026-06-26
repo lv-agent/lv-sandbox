@@ -387,6 +387,7 @@ server:
     enabled: false
     path: "/var/log/sandbox/audit.jsonl"
   api_key: "secret-token"       # cr-023: Bearer token;缺省 = 不鉴权(默认)
+  webhooks: []                    # cr-031: 生命周期 webhook URL;空 = 不推(默认)
 
 sandbox:
   base_dir: "/sandboxes"        # 任务工作空间根目录
@@ -431,6 +432,17 @@ profiles:
 设 `server.audit.enabled: true` 开启 JSONL 审计轨迹(默认关)。每行自包含一个事件:
 started / completed / timed_out / killed / cancelled / failed,带 argv、exit_code、
 signal、duration_ms。审计文件在运维侧(不返 agent);按"可能含命令的日志"加以访问控制。
+
+#### Webhook
+
+配 `server.webhooks` 为 URL 列表,job/session exec 终态时 POST 同一份 AuditEvent
+JSON(event_type、job_id/session_id、status、exit_code、argv……)——免轮询。默认关;
+异步投递(fire-and-forget,3 次重试)。payload 含 argv,须按审计文件保护端点。
+
+```yaml
+server:
+  webhooks: ["https://your-service/lvsandbox-hook"]
+```
 
 ### 超时格式
 
