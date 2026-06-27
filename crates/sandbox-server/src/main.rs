@@ -44,18 +44,47 @@ async fn main() -> anyhow::Result<()> {
     let config_path = resolve_config_path();
     let config = AppConfig::load_from_path(&config_path)?;
 
-    // 2. 初始化日志
+    // 2. 初始化日志(+ OTel trace 层,如配置)
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&config.server.log_level));
+
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    // cr-039: OTel trace 导出(可选)
+    let otel_tracer = if let Some(endpoint) = &config.server.otel_endpoint {
+        match sandbox_server::otel::init_tracer(endpoint) {
+            Ok(tracer) => {
+                eprintln!("OTel trace export enabled: {}", endpoint);
+                Some(tracer)
+            }
+            Err(e) => {
+                eprintln!("OTel init failed, continuing without traces: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let registry = tracing_subscriber::registry().with(filter);
+
     if config.server.log_format == "text" {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
+        if let Some(tracer) = otel_tracer {
+            registry
+                .with(tracing_subscriber::fmt::layer())
+                .with(tracing_opentelemetry::layer().with_tracer(tracer))
+                .init();
+        } else {
+            registry.with(tracing_subscriber::fmt::layer()).init();
+        }
+    } else if let Some(tracer) = otel_tracer {
+        registry
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .json()
-            .init();
+        registry.with(tracing_subscriber::fmt::layer().json()).init();
     }
 
     tracing::info!(

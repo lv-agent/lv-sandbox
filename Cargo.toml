@@ -30,6 +30,10 @@ sandbox-mcp = { path = "crates/sandbox-mcp" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "signal", "io-util", "net", "io-std"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
+opentelemetry = { version = "0.27", features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["trace", "http-proto", "reqwest-client"] }
+tracing-opentelemetry = "0.28"
 
 # Landlock
 landlock = "0.4"

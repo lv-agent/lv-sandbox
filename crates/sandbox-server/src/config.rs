@@ -50,6 +50,9 @@ pub struct ServerSection {
     /// cr-031: 生命周期 webhook URL 列表。空/缺省 = 不推(默认)。
     #[serde(default)]
     pub webhooks: Vec<String>,
+    /// cr-039: OTel OTLP endpoint(如 "http://collector:4318")。None = 不导出。
+    #[serde(default)]
+    pub otel_endpoint: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -75,6 +78,7 @@ impl Default for ServerSection {
             audit: AuditConfig::default(),
             api_key: None,
             webhooks: vec![],
+            otel_endpoint: None,
         }
     }
 }
