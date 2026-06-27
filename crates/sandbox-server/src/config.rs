@@ -23,6 +23,9 @@ pub struct AppConfig {
     pub sandbox: SandboxSection,
     #[serde(default)]
     pub profiles: HashMap<String, ProfileConfig>,
+    /// cr-036: templates = profiles with optional startup setup command.
+    #[serde(default)]
+    pub templates: HashMap<String, TemplateConfig>,
 }
 
 // ==================== Server 段 ====================
@@ -266,6 +269,18 @@ impl ProfileConfig {
     }
 }
 
+// ==================== cr-036: Template ====================
+
+/// Template = ProfileConfig + optional startup setup command。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateConfig {
+    #[serde(flatten)]
+    pub profile: ProfileConfig,
+    /// Worker 启动时执行的预装命令(如 "pip install --target /opt/templates/ds pandas")。None = 无。
+    #[serde(default)]
+    pub setup: Option<String>,
+}
+
 // ==================== Duration 解析 ====================
 
 /// 解析 "5s", "100ms", "1m" 格式的 duration 字符串
@@ -340,6 +355,7 @@ impl Default for AppConfig {
             server: ServerSection::default(),
             sandbox: SandboxSection::default(),
             profiles: HashMap::new(),
+            templates: HashMap::new(),
         }
     }
 }

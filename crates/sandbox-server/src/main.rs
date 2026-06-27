@@ -83,6 +83,25 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     // 启动崩溃恢复——清孤儿一次性 job 目录(会话改为启动重建,见下方 rebuild_from_disk)
+    // cr-036: templates (setup 命令预装 + 注册 profile)
+    for (name, tmpl) in &config.templates {
+        if let Some(cmd) = &tmpl.setup {
+            tracing::info!(template = %name, "running template setup: {}", cmd);
+            match std::process::Command::new("sh").arg("-c").arg(cmd).status() {
+                Ok(s) if s.success() => tracing::info!(template = %name, "template setup done"),
+                Ok(s) => tracing::warn!(template = %name, status = %s, "template setup non-zero, continuing"),
+                Err(e) => tracing::warn!(template = %name, error = %e, "template setup failed, continuing"),
+            }
+        }
+        match tmpl.profile.to_profile(name, &config.sandbox) {
+            Ok(profile) => {
+                tracing::info!(profile = %name, "registered template profile");
+                runner.register_profile(profile);
+            }
+            Err(e) => tracing::warn!(template = %name, error = %e, "invalid template profile, skipping"),
+        }
+    }
+
     if let Err(e) = sandbox_core::recovery::recover(&runner) {
         tracing::warn!(error = %e, "job recovery scan failed");
     }

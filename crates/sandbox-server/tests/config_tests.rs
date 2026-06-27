@@ -395,3 +395,18 @@ profiles:
         std::path::PathBuf::from("/data/shared")
     );
 }
+
+// ==================== cr-036: templates ====================
+
+#[test]
+fn templates_parse_with_setup() {
+    let yaml = "templates:\n  ds:\n    setup: \"echo installing\"\n    rlimit:\n      cpu_seconds: 10\n";
+    let cfg: sandbox_server::config::AppConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(cfg.templates.len(), 1);
+    let tmpl = &cfg.templates["ds"];
+    assert_eq!(tmpl.setup.as_deref(), Some("echo installing"));
+    assert_eq!(tmpl.profile.rlimit.as_ref().unwrap().cpu_seconds, Some(10));
+    // profile conversion works
+    let profile = tmpl.profile.to_profile("ds", &sandbox_server::config::SandboxSection::default()).unwrap();
+    assert_eq!(profile.name, "ds");
+}
