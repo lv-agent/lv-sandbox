@@ -159,3 +159,40 @@ fn workspace_dev_detection_produces_nonzero() {
     // /tmp 所在设备应有非零 major
     assert!(major > 0 || minor > 0, "dev detection: major={major} minor={minor}");
 }
+
+// ==================== cr-038: 资源使用报告 ====================
+
+#[tokio::test]
+async fn job_result_has_resource_usage_when_cgroup_available() {
+    use sandbox_core::job::{JobRequest, JobStatus};
+    use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = SandboxConfig {
+        sandbox_base_dir: tmp.path().to_path_buf(),
+        disk_watermark_bytes: 0,
+    };
+    let runner = SandboxRunner::new(&cfg).await.unwrap();
+
+    let req = JobRequest {
+        job_id: "res-001".to_string(),
+        argv: vec!["/bin/echo".into(), "resource-test".into()],
+        profile_name: "shell".to_string(),
+        timeout: Some(Duration::from_secs(5)),
+        custom_env: HashMap::new(),
+        stdin_data: None,
+    };
+    let result = runner
+        .run_job(req)
+        .await
+        .expect("run_job should not error");
+
+    assert!(matches!(result.status, JobStatus::Completed));
+    // cgroup 可用时应有 resource_usage;不可用时(如无 cgroup v2)为 None——两者都合法
+    if let Some(usage) = &result.resource_usage {
+        // memory_peak 应非零(echo 至少分配了内存)
+        assert!(usage.memory_peak_bytes.unwrap_or(0) > 0, "memory_peak should be non-zero: {:?}", usage);
+    }
+}

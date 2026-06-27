@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use crate::capability::CapabilityReport;
 use crate::env::build_sanitized_env;
 use crate::error::CoreError;
-use crate::job::{JobRequest, JobResult, JobStatus, SandboxViolation, StreamEvent};
+use crate::job::{JobRequest, JobResult, JobStatus, ResourceSummary, SandboxViolation, StreamEvent};
 use crate::process::PreparedSandboxContext;
 use crate::profile::{ProfileRegistry, SandboxProfile};
 use crate::workspace::WorkspaceManager;
@@ -375,7 +375,16 @@ impl SandboxRunner {
             vec![]
         };
 
-        // 15. 清理 cgroup + 代理(工作区由调用者管:一次性 wrapper 或会话 destroy)
+        // 15. 读资源使用 + 清理 cgroup + 代理
+        let resource_usage = if let Some(ref cg) = cgroup {
+            cg.resource_usage().ok().map(|u| ResourceSummary {
+                memory_peak_bytes: u.memory_peak,
+                cpu_usage_usec: u.cpu_usage_usec,
+                pids_peak: u.pids_current,
+            })
+        } else {
+            None
+        };
         if let Some(cg) = cgroup {
             let _ = cg.destroy();
         }
@@ -395,7 +404,7 @@ impl SandboxRunner {
             duration,
             timed_out,
             sandbox_violations,
-            resource_usage: None,
+            resource_usage,
         };
         // cr-024: 流式模式末事件(Result),发完 sender drop → channel 关 → handler 流尾
         if let Some(sink) = stdout_sink {
