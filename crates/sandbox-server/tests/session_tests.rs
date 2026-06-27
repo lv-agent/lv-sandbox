@@ -400,3 +400,44 @@ async fn session_disk_quota_enforced() {
         r.status
     );
 }
+
+/// cr-031 gap: session exec 也触发 webhook(不只 job 路径)。
+#[tokio::test]
+async fn session_exec_fires_webhook() {
+    use sandbox_server::webhook::WebhookDispatcher;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/hook"))
+        .and(body_partial_json(serde_json::json!({"event_type": "JobCompleted"})))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let (_tmp, base_mgr) = mgr().await;
+    // Rebuild with webhook
+    let runner = Arc::new(SandboxRunner::new(&SandboxConfig {
+        sandbox_base_dir: _tmp.path().to_path_buf(),
+        disk_watermark_bytes: 1024 * 1024 * 1024,
+    }).await.unwrap());
+    let wh = WebhookDispatcher::new(vec![format!("{}/hook", mock.uri())]);
+    let m = SessionManager::new(runner, Arc::new(AuditLogger::noop()))
+        .with_webhooks(Arc::new(wh));
+
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
+    m.exec_session(
+        &id,
+        req(vec!["/bin/echo".into(), "wh-session".into()]),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    mock.verify().await;
+    let _ = m.destroy_session(&id);
+}
