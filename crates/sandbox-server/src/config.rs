@@ -118,6 +118,9 @@ pub struct SandboxSection {
     pub default_profile: String,
     #[serde(default = "default_true")]
     pub fail_closed: bool,
+    /// cr-040: 会话 TTL(秒)。超过 TTL 无活动的会话自动清理。None = 永不过期(默认)。
+    #[serde(default)]
+    pub session_ttl_secs: Option<u64>,
 }
 
 fn default_base_dir() -> String {
@@ -140,6 +143,7 @@ impl Default for SandboxSection {
             disk_watermark_mb: default_disk_watermark_mb(),
             default_profile: default_default_profile(),
             fail_closed: default_true(),
+            session_ttl_secs: None,
         }
     }
 }

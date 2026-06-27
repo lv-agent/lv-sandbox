@@ -150,6 +150,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "session rebuild failed");
     }
 
+    // cr-040: 启动会话 TTL reaper(如配置)
+    if let Some(ttl) = config.sandbox.session_ttl_secs {
+        if ttl > 0 {
+            sessions.clone().spawn_reaper(ttl, 60);
+            tracing::info!(ttl_secs = ttl, "session TTL reaper started");
+        }
+    }
+
     // 5. 构建 HTTP 路由
     let state = AppState {
         scheduler: scheduler.clone(),

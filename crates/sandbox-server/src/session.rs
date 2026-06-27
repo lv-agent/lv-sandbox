@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -79,6 +79,53 @@ impl SessionManager {
     pub fn with_webhooks(mut self, w: Arc<crate::webhook::WebhookDispatcher>) -> Self {
         self.webhooks = w;
         self
+    }
+
+    /// cr-040: 扫描并清理过期的会话。返回被清理的 session id 列表。
+    /// `ttl_secs` = 无活动超时秒数。
+    pub fn reap_expired(&self, ttl_secs: u64) -> Vec<String> {
+        let now = Instant::now();
+        let ttl = Duration::from_secs(ttl_secs);
+        let mut reaped = Vec::new();
+
+        // 收集过期 id(持读锁)
+        let expired: Vec<String> = {
+            let guard = self.sessions.read().expect("sessions lock poisoned");
+            guard
+                .iter()
+                .filter(|(_, e)| now.duration_since(e.last_activity) > ttl)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        // 逐个销毁(destroy_session 持写锁)
+        for id in &expired {
+            match self.destroy_session(id) {
+                Ok(()) => {
+                    tracing::info!(session_id = %id, "reaped expired session (TTL {}s)", ttl_secs);
+                    reaped.push(id.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(session_id = %id, error = %e, "failed to reap expired session");
+                }
+            }
+        }
+        reaped
+    }
+
+    /// cr-040: 启动后台 TTL reaper(定时扫描 + 清理)。返回 JoinHandle(可 cancel)。
+    pub fn spawn_reaper(self: &Arc<Self>, ttl_secs: u64, interval_secs: u64) -> tokio::task::JoinHandle<()> {
+        let sm = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                ticker.tick().await;
+                let reaped = sm.reap_expired(ttl_secs);
+                if !reaped.is_empty() {
+                    tracing::info!(count = reaped.len(), "session TTL reaper cleaned up");
+                }
+            }
+        })
     }
 
     /// cr-033: 暴露会话运行上下文(tty handler 用):workspace + profile + exec_lock + runner。

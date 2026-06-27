@@ -428,6 +428,37 @@ fn mime_detection_common_types() {
     assert_eq!(mime_for("noext"), "application/octet-stream");
 }
 
+// ==================== cr-040: session_ttl_secs ====================
+
+#[test]
+fn sandbox_section_session_ttl_secs_defaults_none() {
+    let section = sandbox_server::config::SandboxSection::default();
+    assert!(section.session_ttl_secs.is_none(), "default TTL should be None");
+}
+
+#[test]
+fn sandbox_section_session_ttl_secs_parses_from_yaml() {
+    let yaml = r#"
+sandbox:
+  base_dir: "/sandboxes"
+  session_ttl_secs: 3600
+"#;
+    let config: sandbox_server::config::AppConfig =
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
+    assert_eq!(config.sandbox.session_ttl_secs, Some(3600));
+}
+
+#[test]
+fn sandbox_section_session_ttl_secs_omitted_is_none() {
+    let yaml = r#"
+sandbox:
+  base_dir: "/sandboxes"
+"#;
+    let config: sandbox_server::config::AppConfig =
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
+    assert!(config.sandbox.session_ttl_secs.is_none());
+}
+
 // ==================== cr-036 gap: template setup 执行 ====================
 
 #[tokio::test]

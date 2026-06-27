@@ -417,7 +417,7 @@ async fn session_exec_fires_webhook() {
         .mount(&mock)
         .await;
 
-    let (_tmp, base_mgr) = mgr().await;
+    let (_tmp, _base_mgr) = mgr().await;
     // Rebuild with webhook
     let runner = Arc::new(SandboxRunner::new(&SandboxConfig {
         sandbox_base_dir: _tmp.path().to_path_buf(),
@@ -440,4 +440,86 @@ async fn session_exec_fires_webhook() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     mock.verify().await;
     let _ = m.destroy_session(&id);
+}
+
+// ==================== cr-040: 会话 TTL 自动清理 ====================
+
+/// cr-040: reap_expired(0) 清理所有会话(ttl=0 立即过期)。
+#[tokio::test]
+async fn reap_expired_zero_ttl_cleans_all() {
+    let (_tmp, m) = mgr().await;
+    let id1 = m
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+    let id2 = m
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+
+    let reaped = m.reap_expired(0);
+    assert_eq!(reaped.len(), 2);
+    assert!(reaped.contains(&id1));
+    assert!(reaped.contains(&id2));
+    assert!(m.get_session(&id1).is_none());
+    assert!(m.get_session(&id2).is_none());
+    assert!(m.list_sessions().is_empty());
+}
+
+/// cr-040: reap_expired 在 ttl 很大时保留所有未过期会话。
+#[tokio::test]
+async fn reap_expired_large_ttl_keeps_all() {
+    let (_tmp, m) = mgr().await;
+    let id = m
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+
+    let reaped = m.reap_expired(u64::MAX);
+    assert!(reaped.is_empty());
+    assert!(m.get_session(&id).is_some());
+}
+
+/// cr-040: reap_expired 只清理超过 TTL 的会话,保留未过期的。
+#[tokio::test]
+async fn reap_expired_only_cleans_expired_sessions() {
+    let (_tmp, m) = mgr().await;
+    // 创建会话 A
+    let id_a = m
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+    // 等待 2s 让 A 变"旧"
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 创建会话 B(刚创建,活跃)
+    let id_b = m
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+
+    // TTL=1s:A 过期,B 未过期
+    let reaped = m.reap_expired(1);
+    assert!(reaped.contains(&id_a), "session A should be expired");
+    assert!(!reaped.contains(&id_b), "session B should NOT be expired");
+    assert!(m.get_session(&id_a).is_none(), "A should be destroyed");
+    assert!(m.get_session(&id_b).is_some(), "B should survive");
+}
+
+/// cr-040: reaper 后台任务定时扫描并清理过期会话。
+#[tokio::test]
+async fn reaper_periodically_cleans_expired_sessions() {
+    let (_tmp, m) = mgr().await;
+    let sm = Arc::new(m);
+    let id = sm
+        .create_session("shell", HashMap::new(), None, vec![])
+        .unwrap();
+
+    // TTL=1s,每 2s 扫描一次。首次 tick 立即触发(此时会话未过期),
+    // 第二个 tick(2s 后)会话已超 1s TTL,应被清理。
+    let handle = sm.spawn_reaper(1, 2);
+
+    // 等待足够时间让 reaper 至少执行两次 tick(t=0 + t=2s)
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    assert!(
+        sm.get_session(&id).is_none(),
+        "expired session should be reaped by background reaper"
+    );
+
+    handle.abort();
 }
