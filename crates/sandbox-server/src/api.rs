@@ -250,6 +250,35 @@ struct JobResponse {
     duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timed_out: Option<bool>,
+    /// cr-034: 工作区文件清单(list_files=true 时)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<Vec<FileMeta>>,
+}
+
+/// cr-034: 文件元数据(MIME from extension)。
+#[derive(Debug, Serialize)]
+struct FileMeta {
+    path: String,
+    size: u64,
+    mime: String,
+}
+
+fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -380,6 +409,7 @@ async fn get_job(
                 stderr: None,
                 duration_ms: None,
                 timed_out: None,
+                files: None,
             }),
         )
             .into_response(),
@@ -398,6 +428,7 @@ async fn get_job(
                 )),
                 duration_ms: Some(result.duration.as_millis() as u64),
                 timed_out: Some(result.timed_out),
+                files: None,
             }),
         )
             .into_response(),
@@ -621,6 +652,9 @@ struct ExecSessionRequest {
     stdin: Option<String>,
     #[serde(default)]
     custom_env: Option<std::collections::HashMap<String, String>>,
+    /// cr-034: exec 后附带工作区文件清单(MIME 检测)。默认关。
+    #[serde(default)]
+    list_files: Option<bool>,
 }
 
 async fn exec_session(
@@ -644,6 +678,7 @@ async fn exec_session(
         },
         None => None,
     };
+    let list_files = req.list_files.unwrap_or(false);
     let job_req = sandbox_core::job::JobRequest {
         job_id: format!("session:{id}"),
         argv: req.argv,
@@ -697,6 +732,23 @@ async fn exec_session(
             stderr: Some(crate::redact::redact(&String::from_utf8_lossy(&r.stderr))),
             duration_ms: Some(r.duration.as_millis() as u64),
             timed_out: Some(r.timed_out),
+            files: if list_files {
+                state
+                    .sessions
+                    .list_files(&id, "")
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .map(|e| {
+                                let mime = mime_for(&e.name).to_string();
+                                FileMeta { path: e.name, size: e.size, mime }
+                            })
+                            .collect()
+                    })
+            } else {
+                None
+            },
         })
         .into_response(),
         Err(e) => core_err_response(&e),
