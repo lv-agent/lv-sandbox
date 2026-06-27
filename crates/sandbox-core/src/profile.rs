@@ -47,7 +47,19 @@ impl SandboxProfile {
             cpu_max_quota: Some(200_000),             // 200ms
             cpu_max_period: Some(1_000_000),          // 每 1s 周期
             pids_max: Some(32),
-            io_max: None,
+            io_max: Some(Self::default_io_max()),
+        }
+    }
+
+    /// cr-037: 默认 IO 限速——宽松(防失控,不限正常业务)。major=0 minor=0 = 运行时自动探测。
+    fn default_io_max() -> sandbox_cgroup::IoMax {
+        sandbox_cgroup::IoMax {
+            major: 0,
+            minor: 0,
+            read_bps: Some(200 * 1024 * 1024),    // 200 MB/s 读
+            write_bps: Some(100 * 1024 * 1024),   // 100 MB/s 写
+            read_iops: None,
+            write_iops: None,
         }
     }
 
@@ -97,7 +109,7 @@ impl SandboxProfile {
                 cpu_max_quota: Some(200_000),
                 cpu_max_period: Some(1_000_000),
                 pids_max: Some(32),
-                io_max: None,
+                io_max: Some(Self::default_io_max()),
             }),
             fail_closed: false,
             max_stdout_bytes: 5 * 1024 * 1024,
@@ -130,7 +142,7 @@ impl SandboxProfile {
                 cpu_max_quota: Some(200_000),
                 cpu_max_period: Some(1_000_000),
                 pids_max: Some(32),
-                io_max: None,
+                io_max: Some(Self::default_io_max()),
             }),
             fail_closed: false,
             max_stdout_bytes: 5 * 1024 * 1024,

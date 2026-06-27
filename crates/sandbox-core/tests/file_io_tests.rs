@@ -114,3 +114,23 @@ fn volume_create_list_cleanup() {
     m.cleanup_volume("data").unwrap();
     assert!(!m.list_volumes().unwrap().contains(&"data".to_string()));
 }
+
+// ==================== cr-037: io.max 默认值 ====================
+
+#[test]
+fn builtin_profiles_have_io_limits() {
+    use sandbox_core::profile::SandboxProfile;
+    let shell = SandboxProfile::shell();
+    let cg = shell.cgroup_resources.as_ref().expect("shell has cgroup");
+    let io = cg.io_max.as_ref().expect("shell has io_max");
+    assert!(io.read_bps.unwrap_or(0) > 0, "read_bps should be set");
+    assert!(io.write_bps.unwrap_or(0) > 0, "write_bps should be set");
+    // major=0 minor=0 = sentinel(auto-detect at runtime)
+    assert_eq!(io.major, 0);
+    assert_eq!(io.minor, 0);
+    // python/node also
+    for p in [SandboxProfile::python(), SandboxProfile::node()] {
+        let io2 = p.cgroup_resources.as_ref().unwrap().io_max.as_ref().unwrap();
+        assert!(io2.write_bps.unwrap_or(0) > 0);
+    }
+}

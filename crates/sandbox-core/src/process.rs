@@ -115,8 +115,24 @@ impl PreparedSandboxContext {
             None => None,
         };
 
+        // cr-037: IO 限速——检测 workspace 所在块设备,填充 io.max 的 major:minor
+        let mut resources = profile.cgroup_resources.clone();
+        if let Some(ref mut res) = resources {
+            if let Some(ref mut io) = res.io_max {
+                if io.major == 0 && io.minor == 0 {
+                    // sentinel: 从 workspace 路径探测实际块设备
+                    use std::os::unix::fs::MetadataExt;
+                    if let Ok(meta) = workspace.metadata() {
+                        let dev = meta.dev();
+                        io.major = (dev >> 8) as u64;
+                        io.minor = (dev & 0xff) as u64;
+                    }
+                }
+            }
+        }
+
         // 创建 job cgroup
-        let cgroup = if let Some(resources) = &profile.cgroup_resources {
+        let cgroup = if let Some(resources) = &resources {
             if capability.cgroup.available {
                 match sandbox_cgroup::JobCgroup::create(
                     job_id,
