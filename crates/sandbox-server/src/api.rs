@@ -263,7 +263,7 @@ struct FileMeta {
     mime: String,
 }
 
-fn mime_for(name: &str) -> &'static str {
+pub fn mime_for(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
         "png" => "image/png",
@@ -1361,6 +1361,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dr.status(), StatusCode::OK);
+    }
+
+    /// cr-034: exec list_files=true → 响应含工作区文件清单 + MIME。
+    #[tokio::test]
+    async fn exec_list_files_returns_workspace_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        // 上传一个 PNG
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/chart.png"))
+                    .body(Body::from(&b"fake-png"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // exec 带 list_files=true
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{sid}/exec"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"argv":["/bin/echo","hi"],"list_files":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["files"].is_array(), "files should be present: {json}");
+        let files = json["files"].as_array().unwrap();
+        assert!(
+            files.iter().any(|f| f["path"] == "chart.png" && f["mime"] == "image/png"),
+            "chart.png with image/png expected: {files:?}"
+        );
+    }
+
+    /// cr-033: PTY WebSocket 端到端——连接 tty → 收到 echo 输出 + exit 控制消息。
+    #[tokio::test]
+    async fn tty_websocket_echoes_output() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        // 起真 server(WS upgrade 需要真实 TCP 连接)
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // 连 WebSocket
+        let url = format!(
+            "ws://{addr}/api/v1/sessions/{sid}/tty?argv=/bin/echo+hello-tty"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WS connect");
+
+        let mut got_output = false;
+        let mut got_exit = false;
+        while let Some(Ok(msg)) = ws.next().await {
+            match msg {
+                Message::Binary(data) => {
+                    if String::from_utf8_lossy(&data).contains("hello-tty") {
+                        got_output = true;
+                    }
+                }
+                Message::Text(s) => {
+                    if s.contains("\"type\":\"exit\"") {
+                        got_exit = true;
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        assert!(got_output, "should receive echo output via PTY");
+        assert!(got_exit, "should receive exit control message");
     }
 
     #[tokio::test]

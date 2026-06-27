@@ -317,12 +317,9 @@ async fn run_shell(base: &str, _api_key: Option<&str>, sid: &str, argv: &[String
     let ws_base = base
         .replacen("http://", "ws://", 1)
         .replacen("https://", "wss://", 1);
-    let mut url = format!("{}/api/v1/sessions/{}/tty?", ws_base.trim_end_matches('/'), sid);
-    for a in argv {
-        let enc = a.replace(' ', "+").replace('&', "%26").replace('#', "%23");
-        url.push_str(&format!("argv={enc}&"));
-    }
-    let url = url.trim_end_matches('&').to_string();
+    let mut url = format!("{}/api/v1/sessions/{}/tty?argv=", ws_base.trim_end_matches('/'), sid);
+    let argv_str = argv.join("+");
+    url.push_str(&argv_str);
 
     let (ws, _) = tokio_tungstenite::connect_async(&url)
         .await

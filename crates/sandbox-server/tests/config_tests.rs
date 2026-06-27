@@ -410,3 +410,20 @@ fn templates_parse_with_setup() {
     let profile = tmpl.profile.to_profile("ds", &sandbox_server::config::SandboxSection::default()).unwrap();
     assert_eq!(profile.name, "ds");
 }
+
+// ==================== cr-034: mime_for ====================
+
+#[test]
+fn mime_detection_common_types() {
+    use sandbox_server::api::mime_for;
+    assert_eq!(mime_for("chart.png"), "image/png");
+    assert_eq!(mime_for("photo.jpg"), "image/jpeg");
+    assert_eq!(mime_for("photo.JPEG"), "image/jpeg");
+    assert_eq!(mime_for("page.html"), "text/html");
+    assert_eq!(mime_for("data.json"), "application/json");
+    assert_eq!(mime_for("table.csv"), "text/csv");
+    assert_eq!(mime_for("notes.txt"), "text/plain");
+    assert_eq!(mime_for("readme.md"), "text/markdown");
+    assert_eq!(mime_for("unknown.xyz"), "application/octet-stream");
+    assert_eq!(mime_for("noext"), "application/octet-stream");
+}

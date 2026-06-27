@@ -21,8 +21,8 @@ use crate::session::SessionManager;
 
 #[derive(serde::Deserialize)]
 pub struct TtyQuery {
-    /// argv(重复 query 参数:?argv=/bin/sh&argv=-c&argv=echo hi)
-    pub argv: Vec<String>,
+    /// argv(空格分隔的 query 参数:?argv=/bin/sh+-c+echo+hi)。v1:单个参数不含空格。
+    pub argv: String,
     /// 超时(秒),默认 300
     #[serde(default)]
     pub timeout_secs: Option<u64>,
@@ -39,7 +39,8 @@ pub async fn session_tty(
 }
 
 async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q: TtyQuery) {
-    if q.argv.is_empty() {
+    let argv: Vec<String> = q.argv.split_whitespace().map(|s| s.to_string()).collect();
+    if argv.is_empty() {
         let _ = socket.send(Message::text(r#"{"type":"error","message":"no argv"}"#)).await;
         return;
     }
@@ -107,9 +108,9 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
 
     // 5. 构建 Command(slave 作 stdin/stdout/stderr + pre_exec 全安全管道)
     let workspace_path = workspace.workspace.clone();
-    let mut cmd = tokio::process::Command::new(&q.argv[0]);
-    if q.argv.len() > 1 {
-        cmd.args(&q.argv[1..]);
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
     }
     let slave_in = unsafe { std::fs::File::from_raw_fd(slave_fd) };
     let slave_out = slave_in.try_clone().unwrap_or_else(|_| slave_in.try_clone().unwrap());
@@ -177,8 +178,17 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
                     _ => break, // WS 关闭/错误
                 }
             }
-            // 子进程退出
+            // 子进程退出——先排空 channel(竞态:快速进程的输出可能在 exit 后才到)
             r = child.wait() => {
+                // drain 即时数据
+                while let Ok(data) = rx.try_recv() {
+                    let _ = socket.send(Message::binary(data)).await;
+                }
+                // 给 PTY 读线程一点时间读完残留 + 再 drain
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                while let Ok(data) = rx.try_recv() {
+                    let _ = socket.send(Message::binary(data)).await;
+                }
                 let code = r.as_ref().ok().and_then(|s| s.code());
                 let signal = r.as_ref().ok().and_then(|s| s.signal());
                 let body = format!(
