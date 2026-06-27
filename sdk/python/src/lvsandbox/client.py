@@ -283,6 +283,22 @@ class Client:
     def profiles(self) -> list[str]:
         return self._get("/api/v1/profiles").get("profiles", [])
 
+    # ----- cr-035: code-interpreter / agent-framework helpers -----
+    def run_python(self, code, session=None, *, timeout="60s", profile="python"):
+        """Write *code* → exec Python → return ``(result, workspace_files)``."""
+        from .tools import run_python as _rp
+        return _rp(self, code, session, timeout=timeout, profile=profile)
+
+    def openai_tool_schema(self):
+        """JSON schema for OpenAI function-calling tool definition."""
+        from .tools import openai_tool_schema
+        return openai_tool_schema()
+
+    def langchain_tool(self, profile="python"):
+        """LangChain BaseTool wrapping run_python (requires langchain-core)."""
+        from .tools import langchain_tool
+        return langchain_tool(self, profile)
+
     def close(self) -> None:
         self._http.close()
 

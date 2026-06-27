@@ -74,3 +74,22 @@ def test_volume_persists_across_sessions(client):
             b.destroy()
     finally:
         client.volumes.delete("sdkvol")
+
+
+# ----- cr-035: agent-framework integrations -----
+
+def test_openai_tool_schema():
+    """Unit test — no server needed."""
+    from lvsandbox import openai_tool_schema
+
+    schema = openai_tool_schema()
+    assert schema["type"] == "function"
+    assert schema["function"]["name"] == "run_python"
+    assert "code" in schema["function"]["parameters"]["properties"]
+
+
+def test_run_python(client):
+    """Integration — needs server + python3 in the image/machine."""
+    r, files = client.run_python("print('from-python-sdk')")
+    assert r.status == "Completed"
+    assert "from-python-sdk" in r.stdout
