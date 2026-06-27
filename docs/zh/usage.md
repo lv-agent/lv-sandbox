@@ -5,12 +5,12 @@
 **第 1 步 —— 启动 server:**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.4.0
 docker run -d --name sandbox -p 8080:8080 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.3.0
+  ghcr.io/lv-agent/lv-sandbox:v0.4.0
 curl http://127.0.0.1:8080/health     # → {"status":"ok",...}
 ```
 
@@ -119,15 +119,15 @@ templates:
 **方式 A：从 ghcr.io 拉取（最快）**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
-docker tag ghcr.io/lv-agent/lv-sandbox:v0.3.0 lv-sandbox:0.3.0   # 可选，便于复用下方命令
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.4.0
+docker tag ghcr.io/lv-agent/lv-sandbox:v0.4.0 lv-sandbox:0.4.0   # 可选，便于复用下方命令
 ```
 
 **方式 B：本地构建**
 
 ```bash
 # 本地构建镜像
-docker build -t lv-sandbox:0.3.0 .
+docker build -t lv-sandbox:0.4.0 .
 
 # 或一条命令同时产出镜像 + 二进制 tar.gz（无 Docker 环境的兜底）
 bash scripts/build-release.sh
@@ -143,7 +143,7 @@ docker run -d --name sandbox \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 \
   --user 10000:10000 \
-  lv-sandbox:0.3.0
+  lv-sandbox:0.4.0
 ```
 
 要点：

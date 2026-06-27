@@ -22,13 +22,13 @@ kernel-isolated tasks from one lightweight worker, with zero extra privileges.
 **Start the server:**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.4.0
 docker run -d --name sandbox -p 8080:8080 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.3.0
+  ghcr.io/lv-agent/lv-sandbox:v0.4.0
 ```
 
 **Use it from Python** (E2B-style sessions + code interpreter):
@@ -136,7 +136,7 @@ No container per task. No `--privileged`. No outbound network by default.
 
 ## Status
 
-> **v0.3.0 — early, not security-audited.** Decide fit using the
+> **v0.4.0 — early, not security-audited.** Decide fit using the
 > [threat model](docs/security.md).
 
 **Best fit:** running AI-agent-generated commands where you want kernel-level

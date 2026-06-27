@@ -20,13 +20,13 @@
 **启动 server:**
 
 ```bash
-docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.4.0
 docker run -d --name sandbox -p 8080:8080 \
   --cap-drop=ALL --security-opt no-new-privileges \
   --pids-limit=1000 --memory=4g --cpus=4 \
   --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
   --user 10000:10000 \
-  ghcr.io/lv-agent/lv-sandbox:v0.3.0
+  ghcr.io/lv-agent/lv-sandbox:v0.4.0
 ```
 
 **Python 使用**(E2B 式会话 + 代码解释器):
@@ -126,7 +126,7 @@ cargo build -p lv-cli
 
 ## 状态
 
-> **v0.3.0 — 早期,未做外部安全审计。** 适用性判断见[威胁模型](docs/zh/security.md)。
+> **v0.4.0 — 早期,未做外部安全审计。** 适用性判断见[威胁模型](docs/zh/security.md)。
 
 **最适合:** 运行 AI Agent 生成的命令,需要内核级失败半径控制又不想"一任务一容器";
 单租户或可信租户 worker;Linux ≥ 5.13(Landlock)。
