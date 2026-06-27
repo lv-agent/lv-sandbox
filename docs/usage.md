@@ -1,5 +1,106 @@
 # Usage guide
 
+## Quick start (5 minutes)
+
+**Step 1 — Start the server:**
+
+```bash
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker run -d --name sandbox -p 8080:8080 \
+  --cap-drop=ALL --security-opt no-new-privileges \
+  --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
+  --user 10000:10000 \
+  ghcr.io/lv-agent/lv-sandbox:v0.3.0
+curl http://127.0.0.1:8080/health     # → {"status":"ok",...}
+```
+
+→ See [Build & run](#build--run) for production options (host volumes, source build, etc.)
+
+**Step 2 — Run a command (one-shot job):**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{"job_id":"d1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+# → {"job_id":"d1","status":"Running"}
+curl http://127.0.0.1:8080/api/v1/jobs/d1
+# → {"status":"Completed","exit_code":0,"stdout":"hello\n",...}
+```
+
+→ See [Submit a task](#submit-a-task-async) for polling, cancel, stdin, dry-run.
+
+**Step 3 — Install the Python SDK and use sessions:**
+
+```bash
+pip install -e sdk/python     # from repo, or: pip install lvsandbox
+```
+
+```python
+from lvsandbox import Client
+
+lv = Client("http://127.0.0.1:8080")
+
+# persistent session — files survive across exec calls
+s = lv.sessions.create(profile="python")
+s.files.put("hello.py", b"print('from sandbox')")
+print(s.exec(["/usr/bin/python3", "hello.py"]).stdout)    # → from sandbox
+
+# code interpreter: run Python + see generated files
+r, files = lv.run_python("import matplotlib; print('ok')")
+print(r.stdout, [f.path for f in files])
+```
+
+→ See [Sessions](#sessions-persistent-sandboxes), [Python SDK](#python-sdk--agent-framework-integration), [Snapshots](#snapshots-fork-a-session), [Volumes](#volumes-persistent-storage).
+
+**Step 4 — Install the CLI:**
+
+```bash
+cargo build -p lv-cli
+./target/debug/lvs jobs run -- /bin/echo "from CLI"
+./target/debug/lvs sessions new --profile shell
+./target/debug/lvs exec <id> -- /bin/sh -c 'echo hi > out.txt'
+./target/debug/lvs files get <id> out.txt                 # → hi
+./target/debug/lvs shell <id> -- /bin/sh                  # interactive terminal
+```
+
+→ See [CLI](#cli) for all commands.
+
+**Step 5 — Configure profiles & security:**
+
+```yaml
+# config.yaml
+server:
+  listen_addr: "0.0.0.0:8080"
+  api_key: "your-secret"          # Bearer auth (omit = off)
+sandbox:
+  base_dir: "/sandboxes"
+  fail_closed: false
+profiles:
+  heavy:
+    disk_quota_mb: 100            # per-task aggregate workspace cap
+    rlimit: { cpu_seconds: 30 }
+    default_timeout: "60s"
+templates:
+  data-science:                   # auto-setup at startup
+    setup: "pip install --target /opt/ds pandas numpy"
+    env: { PYTHONPATH: "/opt/ds" }
+```
+
+→ See [Config reference](#config-reference), [Profiles](#profiles), [Templates](#templates-pre-baked-environments), [Authentication](#authentication), [Disk quota](#disk-quota-per-task), [Controlled egress](#controlled-egress-egress-allowlist).
+
+**Step 6 — Connect Claude Code:**
+
+```bash
+# .mcp.json — Claude Code auto-loads this
+{ "mcpServers": { "sandbox": { "command": "cargo",
+  "args": ["run","-p","sandbox-mcp","--quiet","--"],
+  "env": { "SANDBOX_SERVER_URL": "http://127.0.0.1:8080" } } } }
+```
+
+→ See [MCP integration](#mcp-integration-claude-code--hermes-agent).
+
+---
+
 ## Requirements
 
 - Linux, host kernel ≥ 5.13 (Landlock)

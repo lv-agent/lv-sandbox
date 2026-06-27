@@ -1,5 +1,106 @@
 # 使用指南
 
+## 快速上手（5 分钟）
+
+**第 1 步 —— 启动 server:**
+
+```bash
+docker pull ghcr.io/lv-agent/lv-sandbox:v0.3.0
+docker run -d --name sandbox -p 8080:8080 \
+  --cap-drop=ALL --security-opt no-new-privileges \
+  --tmpfs /sandboxes:rw,nosuid,nodev,size=100m,uid=10000,gid=10000 \
+  --user 10000:10000 \
+  ghcr.io/lv-agent/lv-sandbox:v0.3.0
+curl http://127.0.0.1:8080/health     # → {"status":"ok",...}
+```
+
+→ 生产部署选项见[构建与运行](#构建与运行)。
+
+**第 2 步 —— 跑一条命令(一次性 job):**
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{"job_id":"d1","argv":["/bin/echo","hello"],"profile_name":"shell","timeout":"5s","custom_env":{}}'
+# → {"job_id":"d1","status":"Running"}
+curl http://127.0.0.1:8080/api/v1/jobs/d1
+# → {"status":"Completed","exit_code":0,"stdout":"hello\n",...}
+```
+
+→ 轮询/取消/stdin/dry-run 见[提交任务](#提交任务异步)。
+
+**第 3 步 —— 装 Python SDK,用会话:**
+
+```bash
+pip install -e sdk/python     # 从仓库装,或:pip install lvsandbox
+```
+
+```python
+from lvsandbox import Client
+
+lv = Client("http://127.0.0.1:8080")
+
+# 持久会话——文件跨 exec 调用存活
+s = lv.sessions.create(profile="python")
+s.files.put("hello.py", b"print('from sandbox')")
+print(s.exec(["/usr/bin/python3", "hello.py"]).stdout)    # → from sandbox
+
+# 代码解释器:跑 Python + 看生成的文件
+r, files = lv.run_python("import matplotlib; print('ok')")
+print(r.stdout, [f.path for f in files])
+```
+
+→ 详见[会话](#会话持久沙箱)、[Python SDK](#python-sdk-与-agent-框架集成)、[快照](#快照fork-会话)、[卷](#卷持久存储)。
+
+**第 4 步 —— 装 CLI:**
+
+```bash
+cargo build -p lv-cli
+./target/debug/lvs jobs run -- /bin/echo "from CLI"
+./target/debug/lvs sessions new --profile shell
+./target/debug/lvs exec <id> -- /bin/sh -c 'echo hi > out.txt'
+./target/debug/lvs files get <id> out.txt                 # → hi
+./target/debug/lvs shell <id> -- /bin/sh                  # 交互终端
+```
+
+→ 全部命令见 [CLI](#cli)。
+
+**第 5 步 —— 配置 profile 与安全:**
+
+```yaml
+# config.yaml
+server:
+  listen_addr: "0.0.0.0:8080"
+  api_key: "your-secret"          # Bearer 鉴权(不写 = 关)
+sandbox:
+  base_dir: "/sandboxes"
+  fail_closed: false
+profiles:
+  heavy:
+    disk_quota_mb: 100            # 每任务聚合工作区上限
+    rlimit: { cpu_seconds: 30 }
+    default_timeout: "60s"
+templates:
+  data-science:                   # 启动时自动预装
+    setup: "pip install --target /opt/ds pandas numpy"
+    env: { PYTHONPATH: "/opt/ds" }
+```
+
+→ 详见[配置参考](#配置参考)、[Profile](#profile)、[模板](#模板预装环境)、[鉴权](#鉴权)、[磁盘配额](#磁盘配额每任务)、[受控出站](#受控出站egress-allowlist)。
+
+**第 6 步 —— 接入 Claude Code:**
+
+```bash
+# .mcp.json — Claude Code 自动加载
+{ "mcpServers": { "sandbox": { "command": "cargo",
+  "args": ["run","-p","sandbox-mcp","--quiet","--"],
+  "env": { "SANDBOX_SERVER_URL": "http://127.0.0.1:8080" } } } }
+```
+
+→ 详见 [MCP 集成](#mcp-集成claude-code--hermes-agent)。
+
+---
+
 ## 环境要求
 
 - Linux，宿主内核 ≥ 5.13（Landlock 所需）
