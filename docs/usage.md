@@ -196,6 +196,18 @@ lvs shell <session-id> -- /bin/sh
 The server sends a JSON control message `{"type":"exit",...}` when the process
 exits (or `{"type":"timeout"}`).
 
+### Code interpreter mode (list_files)
+
+Pass `"list_files": true` on session exec to get the workspace file listing
+(with MIME type) in the response — the agent sees what files were produced
+(charts, data, HTML) without a separate `files ls` call:
+
+```bash
+curl -X POST ".../sessions/$SID/exec" \
+  -d '{"argv":["/usr/bin/python3","plot.py"],"list_files":true}'
+# → { ..., "files": [{"path":"chart.png","size":12345,"mime":"image/png"}, ...] }
+```
+
 ### Output redaction
 
 `stdout`/`stderr` in `GET /jobs/{id}` responses are redacted — common secret
@@ -247,6 +259,10 @@ write can overshoot by up to `250 ms × write-rate` between polls; the per-file
 `fsize_mb` caps a *single file* (they compose). `dry_run: true` returns the cap
 for previewing. Unset = no cap (the default).
 
+Built-in profiles also set a default **IO rate limit** via cgroup v2 `io.max`
+(200 MB/s read, 100 MB/s write) — generous enough for normal workloads, but
+prevents a runaway task from saturating disk bandwidth.
+
 ### Profiles
 
 Three built-in profiles, chosen per task at submit time:
@@ -291,6 +307,22 @@ Profile `env` is the baseline (operator-trusted): it can set/override `PATH` and
 `LANG`, and add any key. Per-request `custom_env` can only *add* keys the profile
 hasn't set. `HOME`/`TMPDIR` always point at the workspace and can never be
 overridden.
+
+Alternatively, define templates with an auto-setup command that runs once at
+worker startup:
+
+```yaml
+templates:
+  data-science:
+    setup: "pip install --target /opt/templates/ds pandas numpy scikit-learn"
+    extra_readonly_paths: ["/opt/templates/ds"]
+    env:
+      PYTHONPATH: "/opt/templates/ds"
+    default_timeout: "60s"
+```
+
+The `setup` command runs at server start (e.g. installing packages into a
+shared dir); then the profile is registered like any other.
 
 ---
 
@@ -389,6 +421,44 @@ curl -X DELETE http://127.0.0.1:8080/api/v1/volumes/data
 | `POST` | `/volumes` | create (`{name}`) |
 | `GET` | `/volumes` | list |
 | `DELETE` | `/volumes/{name}` | delete |
+
+## Python SDK & agent framework integration
+
+The [`lvsandbox`](../sdk/python) Python package wraps the HTTP API with an
+E2B-style interface — sessions, files, snapshots, volumes, streaming, and
+code-interpreter helpers:
+
+```python
+from lvsandbox import Client
+
+lv = Client("http://127.0.0.1:8080")
+s = lv.sessions.create(profile="python")
+s.files.put("plot.py", open("plot.py","rb").read())
+r, files = lv.run_python(open("plot.py").read())   # write + exec + list_files
+print(r.stdout)
+print([f.path for f in files])                       # → ["chart.png", ...]
+```
+
+Agent-framework integrations:
+- `lv.openai_tool_schema()` → JSON schema for OpenAI function calling.
+- `lv.langchain_tool()` → LangChain `BaseTool` (requires `langchain-core`).
+
+See the [SDK README](../sdk/python/README.md) for full API.
+
+## CLI
+
+The [`lvs`](../crates/lv-cli) command-line tool manages jobs, sessions, files,
+snapshots, and volumes from the terminal:
+
+```bash
+lvs sessions new --profile shell          # → session id
+lvs exec <id> -- /bin/echo hi             # session exec (exits with code)
+lvs files put <id> run.sh ./local.sh      # upload
+lvs files get <id> out.txt                # download
+lvs shell <id> -- /bin/sh                 # interactive PTY
+```
+
+See the [CLI README](../crates/lv-cli/README.md) for all commands.
 
 ## MCP integration (Claude Code / Hermes-Agent)
 

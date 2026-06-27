@@ -270,5 +270,12 @@ running gauge, and fork/exec duration histogram.
   disk_quota_mb).
 - **`disk_quota_mb`** (per profile) caps a task's aggregate workspace usage; a
   task that exceeds it is reaped with `status: "DiskQuotaExceeded"`.
+- **`io.max`** (built-in profiles, cgroup v2) throttles disk I/O rate (200 MB/s
+  read / 100 MB/s write by default) — prevents bandwidth starvation.
+- **`list_files: true`** on session exec returns a `files` array (path + size +
+  MIME) in the response — see what was produced without a separate `files ls`.
+- **`POST /sessions/{id}/exec` + `?stream=true`** → SSE (same as `POST /jobs`).
+- **`GET /sessions/{id}/tty`** → WebSocket upgrade for interactive PTY (stdin ↔
+  stdout over a pseudo-terminal).
 - **Completed jobs are eventually evicted** from the in-memory job table; poll
   promptly rather than hours later. (Sessions/snapshots/volumes persist on disk.)

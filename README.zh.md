@@ -103,6 +103,8 @@ curl -s localhost:8080/api/v1/jobs/net
 - 🌐 [网络隔离](docs/zh/network-isolation.md) — 出站模型深度
 - ⚖️ [方案对比](docs/zh/comparison.md) — 对照 Docker/gVisor/Kata/microVM,按威胁模型选型
 - 🤖 [Claude Code 走查](docs/zh/integrations/claude-code.md) — 5 分钟把 agent 命令接进沙箱
+- 🐍 [Python SDK](sdk/python/README.md) — `lvsandbox` 包:会话、文件、快照、流式、`run_python()`、OpenAI/LangChain 工具
+- 💻 [CLI (`lvs`)](crates/lv-cli/README.md) — 命令行管理 jobs/sessions/files/snapshots/volumes
 - 🇬🇧 English docs: [README](README.md) · [Architecture](docs/architecture.md) · [Usage](docs/usage.md) · [API](docs/api.md) · [Security](docs/security.md) · [Network](docs/network-isolation.md) · [Comparison](docs/comparison.md) · [Claude Code](docs/integrations/claude-code.md)
 
 ## License

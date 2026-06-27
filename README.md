@@ -149,6 +149,8 @@ no phoning home.** For *controlled*, allowlisted egress see [network-isolation.m
 - 🌐 [Network isolation](docs/network-isolation.md) — egress model deep-dive
 - ⚖️ [How it compares](docs/comparison.md) — vs Docker / gVisor / Kata / microVM, by threat model
 - 🤖 [Claude Code walkthrough](docs/integrations/claude-code.md) — run agent commands in the sandbox, end-to-end
+- 🐍 [Python SDK](sdk/python/README.md) — `lvsandbox` package: sessions, files, snapshots, streaming, `run_python()`, OpenAI/LangChain tool schemas
+- 💻 [CLI (`lvs`)](crates/lv-cli/README.md) — manage jobs, sessions, files, snapshots, volumes from the terminal
 - 🇨🇳 中文文档：[README](README.zh.md) · [架构](docs/zh/architecture.md) · [使用指南](docs/zh/usage.md) · [API](docs/zh/api.md) · [安全](docs/zh/security.md) · [网络隔离](docs/zh/network-isolation.md) · [对比](docs/zh/comparison.md) · [Claude Code](docs/zh/integrations/claude-code.md)
 
 ## Requirements

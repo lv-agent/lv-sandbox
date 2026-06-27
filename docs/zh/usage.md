@@ -180,6 +180,17 @@ lvs shell <session-id> -- /bin/sh
 
 进程退出时 server 发 JSON 控制消息 `{"type":"exit",...}`(或 `{"type":"timeout"}`)。
 
+### 代码解释器模式(list_files)
+
+session exec 带 `"list_files": true`,响应附带工作区文件清单(含 MIME 类型)——
+agent 一步看到生成了哪些产物(图表、数据、HTML),无需额外 `files ls`:
+
+```bash
+curl -X POST ".../sessions/$SID/exec" \
+  -d '{"argv":["/usr/bin/python3","plot.py"],"list_files":true}'
+# → { ..., "files": [{"path":"chart.png","size":12345,"mime":"image/png"}, ...] }
+```
+
 ### 输出脱敏
 
 `GET /jobs/{id}` 响应中的 `stdout`/`stderr` 会被脱敏——常见密钥模式（Bearer token、AWS `AKIA` 密钥、GitHub token、PEM 私钥）在返回前替换为 `[REDACTED]`，避免任务误读的凭证（如 `~/.aws/credentials`）泄露进 agent 上下文。
@@ -219,6 +230,9 @@ profiles:
 `disk_quota_mb` 限**总**工作区,`fsize_mb` 限**单文件**(两者互补)。`dry_run: true`
 的响应含该上限。缺省 = 不限(默认)。
 
+内置 profile 还设了默认 **IO 速率限制**(cgroup v2 `io.max`:200 MB/s 读、
+100 MB/s 写)——宽松到正常负载无感,但防止失控任务占满磁盘带宽拖慢其他任务。
+
 ### Profile
 
 内置三个 profile，按任务运行时选择：
@@ -257,6 +271,20 @@ profiles:
 ```
 
 profile 的 `env` 是 baseline(operator 可信):可设/覆盖 `PATH`、`LANG`,可加任意 key。请求级 `custom_env` 只能**加** profile 没设的 key。`HOME`/`TMPDIR` 永远指工作区,任何情况下都不可覆盖。
+
+也可用 `templates:` 配置段定义带自动预装命令的模板(worker 启动时执行一次):
+
+```yaml
+templates:
+  data-science:
+    setup: "pip install --target /opt/templates/ds pandas numpy scikit-learn"
+    extra_readonly_paths: ["/opt/templates/ds"]
+    env:
+      PYTHONPATH: "/opt/templates/ds"
+    default_timeout: "60s"
+```
+
+`setup` 命令在 server 启动时执行一次(如装包到共享只读目录);之后 profile 像普通 profile 一样注册。
 
 ---
 
@@ -346,6 +374,42 @@ curl -X DELETE http://127.0.0.1:8080/api/v1/volumes/data
 | `POST` | `/volumes` | 建(`{name}`) |
 | `GET` | `/volumes` | 列 |
 | `DELETE` | `/volumes/{name}` | 删 |
+
+## Python SDK 与 Agent 框架集成
+
+[`lvsandbox`](../sdk/python) Python 包封装 HTTP API,提供 E2B 式接口——
+会话、文件、快照、卷、流式,以及代码解释器助手:
+
+```python
+from lvsandbox import Client
+
+lv = Client("http://127.0.0.1:8080")
+s = lv.sessions.create(profile="python")
+s.files.put("plot.py", open("plot.py","rb").read())
+r, files = lv.run_python(open("plot.py").read())   # 写 + exec + list_files
+print(r.stdout)
+print([f.path for f in files])                       # → ["chart.png", ...]
+```
+
+Agent 框架集成:
+- `lv.openai_tool_schema()` → OpenAI function calling 的 JSON schema。
+- `lv.langchain_tool()` → LangChain `BaseTool`(需 `langchain-core`)。
+
+完整 API 见 [SDK README](../sdk/python/README.md)。
+
+## CLI
+
+[`lvs`](../crates/lv-cli) 命令行管理 jobs/sessions/files/snapshots/volumes:
+
+```bash
+lvs sessions new --profile shell          # → 会话 id
+lvs exec <id> -- /bin/echo hi             # 会话 exec(以退出码退出)
+lvs files put <id> run.sh ./local.sh      # 上传
+lvs files get <id> out.txt                # 下载
+lvs shell <id> -- /bin/sh                 # 交互 PTY
+```
+
+所有命令见 [CLI README](../crates/lv-cli/README.md)。
 
 ## MCP 集成（Claude Code / Hermes-Agent）
 
