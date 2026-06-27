@@ -134,3 +134,28 @@ fn builtin_profiles_have_io_limits() {
         assert!(io2.write_bps.unwrap_or(0) > 0);
     }
 }
+
+// ==================== cr-037 gap: io.max 设备探测 ====================
+
+#[test]
+fn io_max_default_values_are_generous() {
+    use sandbox_core::profile::SandboxProfile;
+    let p = SandboxProfile::shell();
+    let io = p.cgroup_resources.as_ref().unwrap().io_max.as_ref().unwrap();
+    // 宽松默认(防失控,不限正常)
+    assert!(io.read_bps.unwrap() >= 100 * 1024 * 1024, "read >= 100 MB/s");
+    assert!(io.write_bps.unwrap() >= 50 * 1024 * 1024, "write >= 50 MB/s");
+    // sentinel for auto-detect
+    assert_eq!((io.major, io.minor), (0, 0));
+}
+
+#[test]
+fn workspace_dev_detection_produces_nonzero() {
+    use std::os::unix::fs::MetadataExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let dev = tmp.path().metadata().unwrap().dev();
+    let major = (dev >> 8) as u64;
+    let minor = (dev & 0xff) as u64;
+    // /tmp 所在设备应有非零 major
+    assert!(major > 0 || minor > 0, "dev detection: major={major} minor={minor}");
+}

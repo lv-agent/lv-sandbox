@@ -93,3 +93,20 @@ def test_run_python(client):
     r, files = client.run_python("print('from-python-sdk')")
     assert r.status == "Completed"
     assert "from-python-sdk" in r.stdout
+
+
+def test_langchain_tool_import_error():
+    """langchain_tool raises ImportError when langchain-core is not installed."""
+    from lvsandbox.tools import langchain_tool
+
+    try:
+        import langchain_core  # noqa: F401
+        # If langchain IS installed, just verify it returns something
+        from lvsandbox import Client
+
+        tool = langchain_tool(Client("http://127.0.0.1:0"))
+        assert tool.name == "lv_sandbox_run_python"
+    except ImportError:
+        # Expected: langchain not installed
+        with pytest.raises(ImportError, match="langchain"):
+            langchain_tool(None)

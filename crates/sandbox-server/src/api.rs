@@ -1455,6 +1455,39 @@ mod tests {
         assert!(got_exit, "should receive exit control message");
     }
 
+    /// cr-033 gap: tty WebSocket 连不存在的 session → 收到 error 控制消息。
+    #[tokio::test]
+    async fn tty_websocket_missing_session_error() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let url = format!(
+            "ws://{addr}/api/v1/sessions/nonexistent-session/tty?argv=/bin/echo+hi"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WS connect");
+
+        let mut got_error = false;
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(s) = msg {
+                if s.contains("\"type\":\"error\"") {
+                    got_error = true;
+                    break;
+                }
+            }
+        }
+        assert!(got_error, "should receive error for missing session");
+    }
+
     #[tokio::test]
     async fn profiles_returns_builtin_list() {
         let tmp = tempfile::tempdir().unwrap();

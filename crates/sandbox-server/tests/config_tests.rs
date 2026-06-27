@@ -427,3 +427,38 @@ fn mime_detection_common_types() {
     assert_eq!(mime_for("unknown.xyz"), "application/octet-stream");
     assert_eq!(mime_for("noext"), "application/octet-stream");
 }
+
+// ==================== cr-036 gap: template setup 执行 ====================
+
+#[tokio::test]
+async fn template_setup_executes_and_registers_profile() {
+    use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let marker = tmp.path().join("setup-marker");
+    let marker_str = marker.to_str().unwrap();
+
+    let yaml = format!(
+        r#"templates:
+  test-tmpl:
+    setup: "echo done > {marker_str}"
+    rlimit:
+      cpu_seconds: 5
+"#,
+    );
+    let config: sandbox_server::config::AppConfig = serde_yaml::from_str(&yaml).unwrap();
+
+    let runner_cfg = SandboxConfig {
+        sandbox_base_dir: tmp.path().join("sb").to_path_buf(),
+        disk_watermark_bytes: 0,
+    };
+    let mut runner = SandboxRunner::new(&runner_cfg).await.unwrap();
+
+    let registered = sandbox_server::config::run_template_setups(&config, &mut runner);
+    assert_eq!(registered, vec!["test-tmpl".to_string()]);
+    // setup 命令执行了(marker 文件存在)
+    assert!(marker.exists(), "setup marker should exist");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "done");
+    // profile 注册了
+    assert!(runner.profile_registry().get("test-tmpl").is_some());
+}

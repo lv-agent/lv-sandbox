@@ -271,6 +271,33 @@ impl ProfileConfig {
 
 // ==================== cr-036: Template ====================
 
+/// cr-036: 执行 templates 段的 setup 命令 + 注册 profile。返回成功注册的 profile 名列表。
+pub fn run_template_setups(
+    config: &AppConfig,
+    runner: &mut sandbox_core::sandbox_context::SandboxRunner,
+) -> Vec<String> {
+    let mut registered = Vec::new();
+    for (name, tmpl) in &config.templates {
+        if let Some(cmd) = &tmpl.setup {
+            tracing::info!(template = %name, "running template setup: {}", cmd);
+            match std::process::Command::new("sh").arg("-c").arg(cmd).status() {
+                Ok(s) if s.success() => tracing::info!(template = %name, "template setup done"),
+                Ok(s) => tracing::warn!(template = %name, status = %s, "template setup non-zero, continuing"),
+                Err(e) => tracing::warn!(template = %name, error = %e, "template setup failed, continuing"),
+            }
+        }
+        match tmpl.profile.to_profile(name, &config.sandbox) {
+            Ok(profile) => {
+                tracing::info!(profile = %name, "registered template profile");
+                runner.register_profile(profile);
+                registered.push(name.clone());
+            }
+            Err(e) => tracing::warn!(template = %name, error = %e, "invalid template profile, skipping"),
+        }
+    }
+    registered
+}
+
 /// Template = ProfileConfig + optional startup setup command。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateConfig {
