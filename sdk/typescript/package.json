@@ -1,0 +1,27 @@
+{
+  "name": "lvsandbox",
+  "version": "0.4.0",
+  "description": "TypeScript/JavaScript client for lv-sandbox — lightweight agent sandbox",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": ["index.ts", "README.md"],
+  "scripts": {
+    "test": "node --import tsx --test index.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["sandbox", "code-interpreter", "agent", "ai", "security"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lvtao/lv-sandbox"
+  }
+}
