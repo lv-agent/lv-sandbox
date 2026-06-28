@@ -102,7 +102,9 @@ impl Scheduler {
         self: Arc<Self>,
         request: JobRequest,
     ) -> Result<JobResult, SchedulerError> {
+        crate::metrics::JOB_QUEUE_DEPTH.inc();
         let _permit = self.semaphore.acquire().await.expect("semaphore closed");
+        crate::metrics::JOB_QUEUE_DEPTH.dec();
 
         // Metrics: job 启动 + 运行中
         crate::metrics::JOB_STARTED_TOTAL.inc();
@@ -124,6 +126,18 @@ impl Scheduler {
         if let Ok(ref res) = result {
             if res.timed_out {
                 crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+            }
+            // cr-041: 违规计数
+            for v in &res.sandbox_violations {
+                match v {
+                    sandbox_core::job::SandboxViolation::SeccompDenied { .. } => {
+                        crate::metrics::JOB_SECCOMP_DENIED_TOTAL.inc();
+                    }
+                    sandbox_core::job::SandboxViolation::OomKill => {
+                        crate::metrics::JOB_OOM_KILLED_TOTAL.inc();
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -178,7 +192,9 @@ impl Scheduler {
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
             crate::metrics::RUNNING_JOBS.inc();
+            crate::metrics::JOB_QUEUE_DEPTH.inc();
             let _permit = semaphore.acquire().await.expect("semaphore closed");
+            crate::metrics::JOB_QUEUE_DEPTH.dec();
             let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
 
             let result = runner.run_job_with_cancel(request, cancel, None).await;
@@ -189,6 +205,18 @@ impl Scheduler {
             if let Ok(ref res) = result {
                 if res.timed_out {
                     crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+                }
+                // cr-041: 违规计数
+                for v in &res.sandbox_violations {
+                    match v {
+                        sandbox_core::job::SandboxViolation::SeccompDenied { .. } => {
+                            crate::metrics::JOB_SECCOMP_DENIED_TOTAL.inc();
+                        }
+                        sandbox_core::job::SandboxViolation::OomKill => {
+                            crate::metrics::JOB_OOM_KILLED_TOTAL.inc();
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -272,7 +300,9 @@ impl Scheduler {
         tokio::spawn(async move {
             crate::metrics::JOB_STARTED_TOTAL.inc();
             crate::metrics::RUNNING_JOBS.inc();
+            crate::metrics::JOB_QUEUE_DEPTH.inc();
             let _permit = semaphore.acquire().await.expect("semaphore closed");
+            crate::metrics::JOB_QUEUE_DEPTH.dec();
             let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
 
             // cr-024: 传 Some(tx),run_job 边读边推 stdout + 终态 Result
@@ -284,6 +314,18 @@ impl Scheduler {
             if let Ok(ref res) = result {
                 if res.timed_out {
                     crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+                }
+                // cr-041: 违规计数
+                for v in &res.sandbox_violations {
+                    match v {
+                        sandbox_core::job::SandboxViolation::SeccompDenied { .. } => {
+                            crate::metrics::JOB_SECCOMP_DENIED_TOTAL.inc();
+                        }
+                        sandbox_core::job::SandboxViolation::OomKill => {
+                            crate::metrics::JOB_OOM_KILLED_TOTAL.inc();
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -747,5 +789,71 @@ mod tests {
         // fire-and-forget;给投递一点时间再校验
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         server.verify().await;
+    }
+
+    // ==================== cr-041: queue depth + violation metrics ====================
+
+    /// 排队时 queue_depth gauge > 0。
+    #[tokio::test]
+    async fn queue_depth_gauge_positive_while_waiting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        // max_concurrent=1: 第二个 job 必排队
+        let scheduler = Arc::new(Scheduler::new(Arc::new(runner), 1));
+
+        // 先提交长任务占用唯一的槽(sleep 2s, wait_until_done 最多等 5s)
+        scheduler
+            .submit_async(make_async_request("qd-slow", &["/bin/sleep", "2"]))
+            .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // 再提交第二个任务(排队中)
+        scheduler
+            .submit_async(make_async_request("qd-fast", &["/bin/echo", "hi"]))
+            .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // 此时第二个任务应仍在队列中(第一个还在 sleep)
+        let depth = crate::metrics::JOB_QUEUE_DEPTH.get();
+        assert!(depth >= 1, "queue_depth should be >= 1, got {depth}");
+
+        // 等两个任务完成
+        wait_until_done(&scheduler, "qd-fast").await;
+        wait_until_done(&scheduler, "qd-slow").await;
+
+        // 任务全完成后 queue_depth 应收敛到 0
+        let depth = crate::metrics::JOB_QUEUE_DEPTH.get();
+        assert_eq!(depth, 0, "queue_depth should be 0 after all done, got {depth}");
+    }
+
+    /// seccomp 违规触发 counter 递增。
+    #[tokio::test]
+    async fn seccomp_denied_counter_increments_via_async_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        // unshare(2) 在 seccomp default_denylist → SIGSYS → SeccompDenied 违规
+        let req = JobRequest {
+            job_id: "sec-sched-001".to_string(),
+            argv: vec!["/usr/bin/unshare".into(), "-r".into(), "/bin/true".into()],
+            profile_name: "shell".to_string(),
+            timeout: Some(Duration::from_secs(5)),
+            custom_env: HashMap::new(),
+            stdin_data: None,
+        };
+        scheduler.submit_async(req).await;
+        wait_until_done(&scheduler, "sec-sched-001").await;
+
+        // 读 counter
+        let metric_families = prometheus::gather();
+        for mf in &metric_families {
+            if mf.get_name() == "sandbox_job_seccomp_denied_total" {
+                let val = mf.get_metric()[0].get_counter().get_value();
+                assert!(val >= 1.0, "seccomp_denied counter should be >= 1, got {val}");
+                return;
+            }
+        }
+        panic!("sandbox_job_seccomp_denied_total not found in registered metrics");
     }
 }

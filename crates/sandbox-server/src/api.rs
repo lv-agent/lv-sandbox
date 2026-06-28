@@ -178,6 +178,10 @@ async fn metrics() -> impl IntoResponse {
     let _ = &*crate::metrics::JOB_TIMEOUT_TOTAL;
     let _ = &*crate::metrics::RUNNING_JOBS;
     let _ = &*crate::metrics::FORK_EXEC_DURATION;
+    // cr-041: 违规 + 队列深度
+    let _ = &*crate::metrics::JOB_SECCOMP_DENIED_TOTAL;
+    let _ = &*crate::metrics::JOB_OOM_KILLED_TOTAL;
+    let _ = &*crate::metrics::JOB_QUEUE_DEPTH;
 
     let encoder = prometheus::TextEncoder::new();
     let metric_families = prometheus::gather();
