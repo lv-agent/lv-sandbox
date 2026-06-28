@@ -69,6 +69,10 @@ async fn metrics_endpoint_returns_prometheus_format() {
     assert!(text.contains("sandbox_job_started_total"));
     assert!(text.contains("sandbox_running_jobs"));
     assert!(text.contains("sandbox_fork_exec_duration_seconds"));
+    // cr-041: 违规 + 队列深度指标
+    assert!(text.contains("sandbox_job_seccomp_denied_total"));
+    assert!(text.contains("sandbox_job_oom_killed_total"));
+    assert!(text.contains("sandbox_job_queue_depth"));
 }
 
 #[tokio::test]
@@ -119,6 +123,29 @@ async fn metrics_timeout_counter_increments_after_timeout_job() {
         "timeout counter should increment: before={}, after={}",
         baseline,
         after
+    );
+}
+
+/// cr-041: seccomp 违规触发 counter 递增(end-to-end)。
+#[tokio::test]
+async fn seccomp_denied_counter_increments_via_http() {
+    let baseline = prometheus_metric_value("sandbox_job_seccomp_denied_total");
+
+    let (_tmp, app) = create_test_app().await;
+    let _ = submit_and_wait(
+        app,
+        "sec-e2e-001",
+        &["/usr/bin/unshare", "-r", "/bin/true"],
+        "shell",
+        "5s",
+        HashMap::new(),
+    )
+    .await;
+
+    let after = prometheus_metric_value("sandbox_job_seccomp_denied_total");
+    assert!(
+        after > baseline,
+        "seccomp_denied counter should increment: before={baseline}, after={after}"
     );
 }
 

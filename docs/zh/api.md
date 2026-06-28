@@ -228,7 +228,18 @@
 
 ### `GET /metrics`
 
-Prometheus 文本格式(`text/plain; version=0.0.4`)。暴露 job 计数、运行中 gauge、fork/exec 耗时直方图。
+Prometheus 文本格式(`text/plain; version=0.0.4`)。
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `sandbox_job_started_total` | counter | job 启动总数 |
+| `sandbox_job_finished_total` | counter | job 完成总数 |
+| `sandbox_job_timeout_total` | counter | job 超时总数 |
+| `sandbox_running_jobs` | gauge | 当前运行中的 job 数 |
+| `sandbox_fork_exec_duration_seconds` | histogram | fork→exec 延迟(buckets: 1ms–100ms) |
+| `sandbox_job_seccomp_denied_total` | counter | seccomp 杀掉(SIGSYS)的 job 数 |
+| `sandbox_job_oom_killed_total` | counter | cgroup OOM 杀掉的 job 数 |
+| `sandbox_job_queue_depth` | gauge | 排队等待 semaphore 的 job 数 |
 
 ---
 

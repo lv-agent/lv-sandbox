@@ -245,8 +245,18 @@ environment:
 
 ### `GET /metrics`
 
-Prometheus text format (`text/plain; version=0.0.4`). Exposes job counters,
-running gauge, and fork/exec duration histogram.
+Prometheus text format (`text/plain; version=0.0.4`).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `sandbox_job_started_total` | counter | jobs started |
+| `sandbox_job_finished_total` | counter | jobs finished |
+| `sandbox_job_timeout_total` | counter | jobs timed out |
+| `sandbox_running_jobs` | gauge | currently running jobs |
+| `sandbox_fork_exec_duration_seconds` | histogram | fork→exec latency (buckets: 1ms–100ms) |
+| `sandbox_job_seccomp_denied_total` | counter | jobs killed by seccomp (SIGSYS) |
+| `sandbox_job_oom_killed_total` | counter | jobs killed by cgroup OOM killer |
+| `sandbox_job_queue_depth` | gauge | jobs waiting for semaphore permit |
 
 ---
 
