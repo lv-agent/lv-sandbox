@@ -5,6 +5,7 @@
 //! 启动流程：加载配置 → 初始化 SandboxRunner → 启动 HTTP API → graceful shutdown
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use sandbox_core::sandbox_context::SandboxRunner;
 use sandbox_server::api::AppState;
@@ -189,6 +190,28 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    // cr-043: 优雅关闭——等 in-flight job 完成后再退出
+    let timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
+    let drain_deadline = Instant::now() + timeout;
+    loop {
+        let running = scheduler.running_count();
+        if running == 0 {
+            tracing::info!("all jobs completed, shutting down");
+            break;
+        }
+        if Instant::now() >= drain_deadline {
+            tracing::warn!(
+                running_jobs = running,
+                timeout_secs = config.server.shutdown_timeout_secs,
+                "graceful shutdown timeout, forcing exit with {} running jobs",
+                running
+            );
+            break;
+        }
+        tracing::info!(running_jobs = running, "waiting for jobs to complete...");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 
     tracing::info!("sandbox-server stopped");
     Ok(())

@@ -856,4 +856,26 @@ mod tests {
         }
         panic!("sandbox_job_seccomp_denied_total not found in registered metrics");
     }
+
+    /// cr-043: running_count 反映当前活跃 job 数。
+    #[tokio::test]
+    async fn running_count_reflects_active_jobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = make_runner(tmp.path()).await;
+        let scheduler = Scheduler::new(Arc::new(runner), 10);
+
+        assert_eq!(scheduler.running_count(), 0, "no jobs initially");
+
+        // 提交长任务
+        let jid = scheduler
+            .submit_async(make_async_request("rc-001", &["/bin/sleep", "5"]))
+            .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(scheduler.running_count(), 1, "one job running");
+
+        wait_until_done(&scheduler, &jid).await;
+        // 等一小段时间让 task 完全结束
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(scheduler.running_count(), 0, "back to zero after done");
+    }
 }

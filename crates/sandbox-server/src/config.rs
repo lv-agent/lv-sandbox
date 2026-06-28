@@ -56,6 +56,13 @@ pub struct ServerSection {
     /// cr-042: 速率限制(默认关)。
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    /// cr-043: 优雅关闭超时秒数(默认 30)。
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
+}
+
+fn default_shutdown_timeout() -> u64 {
+    30
 }
 
 fn default_listen_addr() -> String {
@@ -83,6 +90,7 @@ impl Default for ServerSection {
             webhooks: vec![],
             otel_endpoint: None,
             rate_limit: RateLimitConfig::default(),
+            shutdown_timeout_secs: default_shutdown_timeout(),
         }
     }
 }

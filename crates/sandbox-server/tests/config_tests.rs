@@ -497,6 +497,26 @@ server:
     assert!(!config.server.rate_limit.enabled, "rate_limit omitted should be disabled");
 }
 
+// ==================== cr-043: 优雅关闭 ====================
+
+#[test]
+fn shutdown_timeout_secs_defaults_30() {
+    let section = sandbox_server::config::ServerSection::default();
+    assert_eq!(section.shutdown_timeout_secs, 30);
+}
+
+#[test]
+fn shutdown_timeout_secs_parses_from_yaml() {
+    let yaml = r#"
+server:
+  listen_addr: "0.0.0.0:8080"
+  shutdown_timeout_secs: 10
+"#;
+    let config: sandbox_server::config::AppConfig =
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
+    assert_eq!(config.server.shutdown_timeout_secs, 10);
+}
+
 // ==================== cr-036 gap: template setup 执行 ====================
 
 #[tokio::test]
