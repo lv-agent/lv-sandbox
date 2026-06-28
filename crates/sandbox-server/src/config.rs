@@ -53,6 +53,9 @@ pub struct ServerSection {
     /// cr-039: OTel OTLP endpoint(如 "http://collector:4318")。None = 不导出。
     #[serde(default)]
     pub otel_endpoint: Option<String>,
+    /// cr-042: 速率限制(默认关)。
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 fn default_listen_addr() -> String {
@@ -79,6 +82,39 @@ impl Default for ServerSection {
             api_key: None,
             webhooks: vec![],
             otel_endpoint: None,
+            rate_limit: RateLimitConfig::default(),
+        }
+    }
+}
+
+/// cr-042: 速率限制配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// 是否启用(默认 false = 不限制)
+    #[serde(default)]
+    pub enabled: bool,
+    /// 每个时间窗口内允许的请求数
+    #[serde(default = "default_requests_per_window")]
+    pub requests_per_window: u64,
+    /// 时间窗口长度(秒)
+    #[serde(default = "default_window_secs")]
+    pub window_secs: u64,
+}
+
+fn default_requests_per_window() -> u64 {
+    60
+}
+
+fn default_window_secs() -> u64 {
+    60
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            requests_per_window: default_requests_per_window(),
+            window_secs: default_window_secs(),
         }
     }
 }

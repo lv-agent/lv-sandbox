@@ -158,12 +158,27 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // cr-042: 速率限制器
+    let rate_limiter = if config.server.rate_limit.enabled {
+        tracing::info!(
+            reqs_per_window = config.server.rate_limit.requests_per_window,
+            window_secs = config.server.rate_limit.window_secs,
+            "rate limiting enabled"
+        );
+        Some(Arc::new(sandbox_server::ratelimit::RateLimiter::new(
+            &config.server.rate_limit,
+        )))
+    } else {
+        None
+    };
+
     // 5. 构建 HTTP 路由
     let state = AppState {
         scheduler: scheduler.clone(),
         sessions,
         config_path: std::path::PathBuf::from(&config_path),
         api_key: config.server.api_key.clone(),
+        rate_limiter,
     };
     let app = sandbox_server::api::app(state);
 

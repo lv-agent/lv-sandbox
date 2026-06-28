@@ -459,6 +459,44 @@ sandbox:
     assert!(config.sandbox.session_ttl_secs.is_none());
 }
 
+// ==================== cr-042: 速率限制 ====================
+
+#[test]
+fn rate_limit_defaults_disabled() {
+    let section = sandbox_server::config::ServerSection::default();
+    assert!(!section.rate_limit.enabled, "rate limit should be disabled by default");
+    assert_eq!(section.rate_limit.requests_per_window, 60);
+    assert_eq!(section.rate_limit.window_secs, 60);
+}
+
+#[test]
+fn rate_limit_parses_from_yaml() {
+    let yaml = r#"
+server:
+  listen_addr: "0.0.0.0:8080"
+  rate_limit:
+    enabled: true
+    requests_per_window: 100
+    window_secs: 30
+"#;
+    let config: sandbox_server::config::AppConfig =
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
+    assert!(config.server.rate_limit.enabled);
+    assert_eq!(config.server.rate_limit.requests_per_window, 100);
+    assert_eq!(config.server.rate_limit.window_secs, 30);
+}
+
+#[test]
+fn rate_limit_omitted_is_default_disabled() {
+    let yaml = r#"
+server:
+  listen_addr: "0.0.0.0:8080"
+"#;
+    let config: sandbox_server::config::AppConfig =
+        serde_yaml::from_str(yaml).expect("YAML parse failed");
+    assert!(!config.server.rate_limit.enabled, "rate_limit omitted should be disabled");
+}
+
 // ==================== cr-036 gap: template setup 执行 ====================
 
 #[tokio::test]

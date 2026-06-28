@@ -60,3 +60,12 @@ pub static JOB_QUEUE_DEPTH: Lazy<IntGauge> = Lazy::new(|| {
     )
     .unwrap()
 });
+
+/// cr-042: 速率限制拒绝总数（429）
+pub static RATE_LIMIT_DENIED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "sandbox_rate_limit_denied_total",
+        "total requests denied by rate limiting"
+    )
+    .unwrap()
+});

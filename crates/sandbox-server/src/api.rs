@@ -37,13 +37,16 @@ pub struct AppState {
     pub config_path: PathBuf,
     /// cr-023: Bearer API key(None = 鉴权关)
     pub api_key: Option<String>,
+    /// cr-042: 速率限制器(None = 不限流)
+    pub rate_limiter: Option<Arc<crate::ratelimit::RateLimiter>>,
 }
 
 /// 构建路由
 pub fn app(state: AppState) -> Router {
     // cr-023: 全量挂鉴权中间件(api_key 作为中间件独立 state 传入);/health 在中间件内按路径放行。
     let api_key = state.api_key.clone();
-    Router::new()
+    let rate_limiter = state.rate_limiter.clone();
+    let mut router = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/api/v1/jobs", post(create_job))
@@ -72,7 +75,16 @@ pub fn app(state: AppState) -> Router {
         // cr-028: 卷
         .route("/api/v1/volumes", post(create_volume).get(list_volumes))
         .route("/api/v1/volumes/{name}", delete(destroy_volume))
-        .layer(middleware::from_fn_with_state(api_key, require_api_key))
+        // cr-023: 鉴权层
+        .route_layer(middleware::from_fn_with_state(api_key, require_api_key));
+    // cr-042: 速率限制层(在 auth 外层,尽早拦截)
+    if let Some(lim) = rate_limiter {
+        router = router.layer(middleware::from_fn_with_state(
+            lim,
+            crate::ratelimit::rate_limit_middleware,
+        ));
+    }
+    router
         // cr-026: 放宽 body 上限供文件上传(默认 2MB 太小);JSON 端点不受影响(体小)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(Arc::new(state))
@@ -182,6 +194,8 @@ async fn metrics() -> impl IntoResponse {
     let _ = &*crate::metrics::JOB_SECCOMP_DENIED_TOTAL;
     let _ = &*crate::metrics::JOB_OOM_KILLED_TOTAL;
     let _ = &*crate::metrics::JOB_QUEUE_DEPTH;
+    // cr-042: 速率限制
+    let _ = &*crate::metrics::RATE_LIMIT_DENIED_TOTAL;
 
     let encoder = prometheus::TextEncoder::new();
     let metric_families = prometheus::gather();
@@ -916,6 +930,7 @@ mod tests {
             sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
+            rate_limiter: None,
         })
     }
 
@@ -933,6 +948,7 @@ mod tests {
             sessions,
             config_path: std::path::PathBuf::new(),
             api_key: key.map(String::from),
+            rate_limiter: None,
         })
     }
 
@@ -1602,6 +1618,7 @@ mod tests {
             sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
+            rate_limiter: None,
         })
     }
 
@@ -1669,6 +1686,7 @@ profiles:
             sessions,
             config_path: config_path.clone(),
             api_key: None,
+            rate_limiter: None,
         });
 
         let response = app
@@ -1729,6 +1747,7 @@ profiles:
             sessions,
             config_path: config_path.clone(),
             api_key: None,
+            rate_limiter: None,
         });
 
         let response = app
@@ -1840,6 +1859,7 @@ profiles:
             sessions,
             config_path: std::path::PathBuf::new(),
             api_key: None,
+            rate_limiter: None,
         });
 
         let body = serde_json::json!({

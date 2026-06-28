@@ -39,6 +39,7 @@ pub async fn create_test_app_with_concurrency(max: usize) -> (tempfile::TempDir,
         sessions,
         config_path: std::path::PathBuf::new(),
         api_key: None,
+        rate_limiter: None,
     };
     (tmp, app(state))
 }
@@ -66,6 +67,7 @@ pub async fn create_test_app_with_profiles(
         sessions,
         config_path: std::path::PathBuf::new(),
         api_key: None,
+        rate_limiter: None,
     };
     (tmp, app(state))
 }

@@ -460,6 +460,7 @@ async fn session_ttl_reaper_cleans_expired_session_via_http() {
         sessions,
         config_path: std::path::PathBuf::new(),
         api_key: None,
+        rate_limiter: None,
     };
     let app = app(state);
 
