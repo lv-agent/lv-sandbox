@@ -294,14 +294,38 @@ impl SessionManager {
 
         // 串行:同一会话 exec 互斥
         let _guard = exec_lock.lock().await;
+
+        // cr-041: session exec metrics(与 scheduler 对齐)
+        crate::metrics::JOB_STARTED_TOTAL.inc();
+        crate::metrics::RUNNING_JOBS.inc();
+        let timer = crate::metrics::FORK_EXEC_DURATION.start_timer();
+
         let result = self
             .runner
             .run_in_workspace(&workspace, &profile, request, cancel, sink)
             .await;
 
+        timer.observe_duration();
+        crate::metrics::JOB_FINISHED_TOTAL.inc();
+        crate::metrics::RUNNING_JOBS.dec();
+
         // 终态审计 + webhook + 更新计数
         let result = match result {
             Ok(r) => {
+                if r.timed_out {
+                    crate::metrics::JOB_TIMEOUT_TOTAL.inc();
+                }
+                for v in &r.sandbox_violations {
+                    match v {
+                        sandbox_core::job::SandboxViolation::SeccompDenied { .. } => {
+                            crate::metrics::JOB_SECCOMP_DENIED_TOTAL.inc();
+                        }
+                        sandbox_core::job::SandboxViolation::OomKill => {
+                            crate::metrics::JOB_OOM_KILLED_TOTAL.inc();
+                        }
+                        _ => {}
+                    }
+                }
                 let ev = crate::audit::AuditEvent::new(
                     crate::audit::status_to_event_type(&r.status),
                     id,

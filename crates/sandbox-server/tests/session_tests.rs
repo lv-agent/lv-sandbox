@@ -523,3 +523,41 @@ async fn reaper_periodically_cleans_expired_sessions() {
 
     handle.abort();
 }
+
+/// cr-041: session exec 应 emit Prometheus 指标(job_started/job_finished 递增)。
+#[tokio::test]
+async fn session_exec_emits_metrics() {
+    let (_tmp, m) = mgr().await;
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
+
+    // 读执行前计数器(从 prometheus 默认 registry)
+    fn counter_val(name: &str) -> f64 {
+        for mf in prometheus::gather() {
+            if mf.get_name() == name && !mf.get_metric().is_empty() {
+                return mf.get_metric()[0].get_counter().get_value();
+            }
+        }
+        0.0
+    }
+    let started_before = counter_val("sandbox_job_started_total");
+    let finished_before = counter_val("sandbox_job_finished_total");
+
+    m.exec_session(
+        &id,
+        req(vec!["/bin/echo".into(), "metrics-test".into()]),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // exec 后计数器应 +1
+    assert!(
+        counter_val("sandbox_job_started_total") > started_before,
+        "JOB_STARTED_TOTAL should increment"
+    );
+    assert!(
+        counter_val("sandbox_job_finished_total") > finished_before,
+        "JOB_FINISHED_TOTAL should increment"
+    );
+}
