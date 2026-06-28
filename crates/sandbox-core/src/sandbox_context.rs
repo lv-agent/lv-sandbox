@@ -219,6 +219,12 @@ impl SandboxRunner {
                 tracing::warn!(job_id = %request.job_id, error = %e, "cgroup migration failed");
             }
         }
+        // cr-041: 记录迁移后 oom_kill 计数基线(OOM 检测用)
+        let oom_kill_before = if let Some(ref cg) = cgroup {
+            cg.oom_kill_count().unwrap_or(None).unwrap_or(0)
+        } else {
+            0
+        };
 
         // 10. 写入 stdin 数据（如果有）
         if let Some(stdin_data) = request.stdin_data {
@@ -368,14 +374,28 @@ impl SandboxRunner {
             JobStatus::Completed
         };
 
-        // cr-022: 配额超限标注原因（启用预埋的 FileSizeExceeded 钩子）
-        let sandbox_violations = if disk_quota_exceeded {
-            vec![SandboxViolation::FileSizeExceeded]
-        } else {
-            vec![]
-        };
+        // cr-041: 违规检测——多来源聚合(disk quota / seccomp SIGSYS / cgroup OOM)
+        let mut sandbox_violations = Vec::new();
+        if disk_quota_exceeded {
+            sandbox_violations.push(SandboxViolation::FileSizeExceeded);
+        }
+        if exit_status.as_ref().and_then(|s| s.signal()) == Some(31) {
+            // SIGSYS = seccomp SECCOMP_RET_KILL_PROCESS 杀死进程
+            sandbox_violations.push(SandboxViolation::SeccompDenied {
+                syscall: "unknown".to_string(),
+            });
+        }
 
         // 15. 读资源使用 + 清理 cgroup + 代理
+        // cr-041: 收割后读 oom_kill 计数，与基线比较检测 cgroup OOM
+        let oom_kill_after = if let Some(ref cg) = cgroup {
+            cg.oom_kill_count().unwrap_or(None).unwrap_or(0)
+        } else {
+            0
+        };
+        if oom_kill_after > oom_kill_before {
+            sandbox_violations.push(SandboxViolation::OomKill);
+        }
         let resource_usage = if let Some(ref cg) = cgroup {
             cg.resource_usage().ok().map(|u| ResourceSummary {
                 memory_peak_bytes: u.memory_peak,

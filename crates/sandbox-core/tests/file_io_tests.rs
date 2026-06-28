@@ -196,3 +196,120 @@ async fn job_result_has_resource_usage_when_cgroup_available() {
         assert!(usage.memory_peak_bytes.unwrap_or(0) > 0, "memory_peak should be non-zero: {:?}", usage);
     }
 }
+
+// ==================== cr-041: 违规检测(Seccomp SIGSYS / OOM) ====================
+
+/// 被 seccomp kill 的进程应报告 SeccompDenied 违规。
+/// `unshare` 调用 unshare(2) syscall，该 syscall 在 default_denylist 中。
+#[tokio::test]
+async fn job_result_has_seccomp_denied_when_killed_by_sigsys() {
+    use sandbox_core::job::{JobRequest, JobStatus, SandboxViolation};
+    use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = SandboxConfig {
+        sandbox_base_dir: tmp.path().to_path_buf(),
+        disk_watermark_bytes: 0,
+    };
+    let runner = SandboxRunner::new(&cfg).await.unwrap();
+
+    // unshare(2) 在 seccomp default_denylist → SIGSYS=31
+    let req = JobRequest {
+        job_id: "sec-001".to_string(),
+        argv: vec!["/usr/bin/unshare".into(), "-r".into(), "/bin/true".into()],
+        profile_name: "shell".to_string(),
+        timeout: Some(Duration::from_secs(5)),
+        custom_env: HashMap::new(),
+        stdin_data: None,
+    };
+    let result = runner
+        .run_job(req)
+        .await
+        .expect("run_job should not error");
+
+    assert!(
+        matches!(result.status, JobStatus::Killed),
+        "unshare should be killed by seccomp, got {:?}",
+        result.status
+    );
+    assert_eq!(result.signal, Some(31), "signal should be SIGSYS(31)");
+    assert!(
+        result
+            .sandbox_violations
+            .iter()
+            .any(|v| matches!(v, SandboxViolation::SeccompDenied { .. })),
+        "should contain SeccompDenied: {:?}",
+        result.sandbox_violations
+    );
+}
+
+/// cgroup OOM 应报告 OomKill 违规。
+/// 仅 cgroup v2 可用时生效;否则跳过。
+#[tokio::test]
+async fn job_result_has_oom_kill_when_cgroup_oom() {
+    use sandbox_core::job::{JobRequest, JobStatus, SandboxViolation};
+    use sandbox_core::profile::SandboxProfile;
+    use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
+    use sandbox_cgroup::CgroupResources;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = SandboxConfig {
+        sandbox_base_dir: tmp.path().to_path_buf(),
+        disk_watermark_bytes: 0,
+    };
+    let mut runner = SandboxRunner::new(&cfg).await.unwrap();
+
+    // 注册低内存 profile(cgroup v2 可用且能迁移进程时测试;否则 skip)
+    let cap = runner.capability();
+    if !cap.cgroup.can_migrate_processes {
+        eprintln!("skipping: cgroup v2 not available");
+        return;
+    }
+
+    let cgroup = SandboxProfile::shell().cgroup_resources.unwrap();
+    runner.register_profile(SandboxProfile {
+        name: "oom-test".to_string(),
+        cgroup_resources: Some(CgroupResources {
+            memory_max: Some(5 * 1024 * 1024), // 5MB
+            pids_max: Some(32),
+            ..cgroup
+        }),
+        ..SandboxProfile::shell()
+    });
+
+    // 串联 10MB 字符串于 shell 变量(cgroup OOM 在 5MB 上限触发)
+    let req = JobRequest {
+        job_id: "oom-001".to_string(),
+        argv: vec![
+            "/bin/bash".into(),
+            "-c".into(),
+            "v=; for ((i=0;i<10000000;i++)); do v+=x; done; echo ok".into(),
+        ],
+        profile_name: "oom-test".to_string(),
+        timeout: Some(Duration::from_secs(10)),
+        custom_env: HashMap::new(),
+        stdin_data: None,
+    };
+    let result = runner
+        .run_job(req)
+        .await
+        .expect("run_job should not error");
+
+    assert!(
+        matches!(result.status, JobStatus::Killed),
+        "OOM should kill the process, got {:?}",
+        result.status
+    );
+    assert!(
+        result
+            .sandbox_violations
+            .iter()
+            .any(|v| matches!(v, SandboxViolation::OomKill)),
+        "should contain OomKill: {:?}",
+        result.sandbox_violations
+    );
+}
