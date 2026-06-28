@@ -120,6 +120,21 @@ impl JobCgroup {
         })
     }
 
+    /// cr-041: 读 cgroup `memory.events` 中 `oom_kill` 计数器。
+    ///
+    /// 返回 `Ok(None)` 表示 cgroup 可用但文件不存在(控制器未挂载)。
+    /// 调用方可在 job 执行前后比较该值以检测 OOM。
+    pub fn oom_kill_count(&self) -> Result<Option<u64>, CgroupError> {
+        let path = self.path.join("memory.events");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            CgroupError::ReadFailed(format!("failed to read {:?}: {}", path, e))
+        })?;
+        Ok(parse_oom_kill_count(&content))
+    }
+
     /// 列出 cgroup 内所有进程
     pub fn processes(&self) -> Result<Vec<u32>, CgroupError> {
         let content = std::fs::read_to_string(self.path.join("cgroup.procs"))?;
@@ -169,6 +184,19 @@ fn cg_write(cg_path: &Path, file: &str, value: &str) -> Result<(), CgroupError> 
     Ok(())
 }
 
+/// 从 `memory.events` 内容中解析 `oom_kill` 计数器值。
+///
+/// 格式: "low 0\nhigh 0\nmax 0\noom 0\noom_kill 42\noom_group_kill 0\n"
+/// 若行缺失或解析失败则返回 None。
+fn parse_oom_kill_count(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        if line.starts_with("oom_kill ") {
+            return line.split_whitespace().nth(1)?.parse::<u64>().ok();
+        }
+    }
+    None
+}
+
 /// 读取 cgroup 文件中的 u64 值
 fn cg_read_u64(cg_path: &Path, file: &str) -> Result<Option<u64>, CgroupError> {
     let path = cg_path.join(file);
@@ -180,4 +208,38 @@ fn cg_read_u64(cg_path: &Path, file: &str) -> Result<Option<u64>, CgroupError> {
     })?;
     // 某些文件可能返回 "max" 等非数值
     Ok(content.trim().parse::<u64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_oom_kill_count_returns_value() {
+        let content = "low 0\nhigh 0\nmax 0\noom 0\noom_kill 42\noom_group_kill 0\n";
+        assert_eq!(parse_oom_kill_count(content), Some(42));
+    }
+
+    #[test]
+    fn parse_oom_kill_count_returns_zero() {
+        let content = "oom_kill 0\n";
+        assert_eq!(parse_oom_kill_count(content), Some(0));
+    }
+
+    #[test]
+    fn parse_oom_kill_count_missing_returns_none() {
+        let content = "low 0\nhigh 0\n";
+        assert_eq!(parse_oom_kill_count(content), None);
+    }
+
+    #[test]
+    fn parse_oom_kill_count_empty_returns_none() {
+        assert_eq!(parse_oom_kill_count(""), None);
+    }
+
+    #[test]
+    fn parse_oom_kill_count_large_value() {
+        let content = "oom_kill 18446744073709551615\n";
+        assert_eq!(parse_oom_kill_count(content), Some(u64::MAX));
+    }
 }

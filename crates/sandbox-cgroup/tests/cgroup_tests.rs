@@ -313,3 +313,37 @@ fn job_cgroup_create_returns_err_when_unavailable() {
 
     assert!(result.is_err(), "should return error when unavailable");
 }
+
+// ==================== cr-041: OOM detection ====================
+
+#[test]
+fn oom_kill_count_returns_zero_for_empty_cgroup() {
+    let parent = match writable_cgroup_parent() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no writable cgroup directory");
+            return;
+        }
+    };
+
+    let avail = detect();
+    let resources = CgroupResources {
+        memory_max: Some(500 * 1024 * 1024),
+        cpu_max_quota: None,
+        cpu_max_period: None,
+        pids_max: Some(64),
+        io_max: None,
+    };
+
+    let cg = JobCgroup::create(
+        "test-oom-kill-001",
+        Path::new(&parent),
+        &resources,
+        &avail,
+    ).expect("create should succeed");
+
+    let count = cg.oom_kill_count().expect("reading oom_kill should not fail");
+    assert_eq!(count, Some(0), "empty cgroup should have oom_kill=0, got: {:?}", count);
+
+    cg.destroy().expect("destroy should not fail");
+}
