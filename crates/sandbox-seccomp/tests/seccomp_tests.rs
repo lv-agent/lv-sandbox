@@ -342,3 +342,85 @@ fn default_allowlist_shell_socket_af_unix_only() {
     assert_eq!(r.conditions.len(), 1);
     assert_eq!(r.conditions[0].value, libc::AF_UNIX as u64);
 }
+
+/// 回归:allowlist 下 shell 基本命令必须能跑(锁白名单完备性)。
+/// 白名单漏 syscall → 命令被 SIGSYS 杀 → 输出缺失 → 测试 fail。
+#[test]
+fn default_allowlist_shell_runs_basic_commands() {
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_shell())
+        .expect("prepare should not fail");
+
+    // 1) 纯 echo
+    let out = unsafe {
+        Command::new("/bin/echo")
+            .arg("allowlist_ok")
+            .pre_exec(move || {
+                prepared.apply().expect("apply should not fail");
+                Ok(())
+            })
+            .output()
+            .expect("exec failed")
+    };
+    assert_eq!(out.status.code(), Some(0), "echo exited abnormally: {:?}", out);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "allowlist_ok"
+    );
+
+    // 2) sh -c(涉及 fork/exec/重定向,覆盖更多 syscall)
+    let prepared2 = PreparedFilter::prepare(&SeccompProfile::default_allowlist_shell())
+        .expect("prepare should not fail");
+    let out2 = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo sh_ok; printf 'p\\n'")
+            .pre_exec(move || {
+                prepared2.apply().expect("apply should not fail");
+                Ok(())
+            })
+            .output()
+            .expect("exec failed")
+    };
+    assert_eq!(
+        out2.status.code(),
+        Some(0),
+        "sh -c exited abnormally: {:?}",
+        out2
+    );
+    let s = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        s.contains("sh_ok") && s.contains("p\n"),
+        "sh output wrong: {s}"
+    );
+}
+
+/// 回归:allowlist 下 INET socket 仍被禁(保持 cr-019 AF_UNIX-only 基线)。
+#[test]
+fn default_allowlist_shell_blocks_inet_socket() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no python3 to trigger INET socket");
+        return;
+    }
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_shell())
+        .expect("prepare should not fail");
+    let out = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("python3 -c \"import socket; socket.socket(socket.AF_INET)\" 2>/dev/null; echo DONE=$?")
+            .pre_exec(move || {
+                prepared.apply().expect("apply should not fail");
+                Ok(())
+            })
+            .output()
+            .expect("exec failed")
+    };
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !s.contains("DONE=0"),
+        "INET socket() must be killed under allowlist, got: {s}"
+    );
+}
