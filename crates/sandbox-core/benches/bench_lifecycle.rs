@@ -85,8 +85,8 @@ fn bench_runner_rss(c: &mut Criterion) {
 
     group.bench_function("runner_rss", |b| {
         b.iter(|| {
-            let rss_kb = read_vm_rss_kb();
-            rss_kb
+            
+            read_vm_rss_kb()
         });
     });
 

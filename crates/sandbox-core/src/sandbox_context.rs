@@ -139,7 +139,7 @@ impl SandboxRunner {
 
         // 3. 准备安全上下文（编译 landlock/seccomp/cgroup）
         let mut prepared_ctx = PreparedSandboxContext::prepare(
-            &profile,
+            profile,
             &job_workspace.workspace,
             &request.job_id,
             &self.capability,

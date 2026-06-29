@@ -53,7 +53,7 @@ impl PreparedFilter {
                 let comparators: Vec<ScmpArgCompare> = rule
                     .conditions
                     .iter()
-                    .map(|c| condition_to_comparator(c))
+                    .map(condition_to_comparator)
                     .collect();
 
                 ctx.add_rule_conditional(action, syscall, &comparators)

@@ -21,7 +21,7 @@ async fn no_new_privs_is_set() {
 
 #[tokio::test]
 async fn setsid_creates_new_session() {
-    let parent_sid = unsafe { libc::getsid(0) };
+    let _parent_sid = unsafe { libc::getsid(0) };
     let (_tmp, runner) = create_test_runner().await;
     let req = make_job_request("sid-001", &["/bin/cat", "/proc/self/status"]);
     let result = runner.run_job(req).await.expect("execution failed");
@@ -76,7 +76,7 @@ async fn landlock_blocks_writes_to_unauthorized_paths() {
         "ll-001",
         &["/bin/sh", "-c", "echo test > /var/tmp/e2e_landlock_test.txt; echo exit=$?"],
     );
-    let result = runner.run_job(req).await.expect("execution failed");
+    let _result = runner.run_job(req).await.expect("execution failed");
 
     // 即使 shell 报错，文件不应存在
     assert!(
@@ -88,7 +88,7 @@ async fn landlock_blocks_writes_to_unauthorized_paths() {
 #[tokio::test]
 async fn landlock_allows_workspace_write() {
     let (tmp, runner) = create_test_runner().await;
-    let base_dir = tmp.path().to_path_buf();
+    let _base_dir = tmp.path().to_path_buf();
 
     // workspace 内写文件应该成功
     let req = make_job_request(

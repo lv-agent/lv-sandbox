@@ -343,7 +343,7 @@ async fn multiple_jobs_run_in_parallel_without_interference() {
     let results = futures::future::join_all(handles).await;
 
     for (i, result) in results.into_iter().enumerate() {
-        let r = result.expect(&format!("job {i} should not error"));
+        let r = result.unwrap_or_else(|_| panic!("job {i} should not error"));
         assert!(
             matches!(r.status, JobStatus::Completed),
             "job {i} should complete normally"

@@ -178,7 +178,7 @@ fn workspace_size_computes_total_directory_size() {
 
     // 写入一些数据
     std::fs::write(ws.workspace.join("test.txt"), "hello world").expect("failed to write");
-    std::fs::write(ws.workspace.join("data.bin"), &[0u8; 1024]).expect("failed to write");
+    std::fs::write(ws.workspace.join("data.bin"), [0u8; 1024]).expect("failed to write");
 
     let size = mgr.workspace_size("job-size-001").expect("size computation should not error");
     // "hello world" = 11 字节 + 1024 字节 = 1035 字节

@@ -17,6 +17,12 @@ pub struct FsPolicy {
     rules: Vec<AccessRule>,
 }
 
+impl Default for FsPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FsPolicy {
     pub fn new() -> Self {
         Self { rules: Vec::new() }

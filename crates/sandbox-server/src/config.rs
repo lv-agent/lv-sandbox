@@ -16,6 +16,7 @@ use sandbox_core::rlimit::RlimitConfig;
 
 /// 应用顶层配置（对应 YAML 文件）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerSection,
@@ -428,16 +429,6 @@ impl AppConfig {
     }
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerSection::default(),
-            sandbox: SandboxSection::default(),
-            profiles: HashMap::new(),
-            templates: HashMap::new(),
-        }
-    }
-}
 
 /// 从配置路径构建 SandboxRunner（含 profile 注册）。
 ///

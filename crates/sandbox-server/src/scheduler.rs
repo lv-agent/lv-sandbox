@@ -20,6 +20,12 @@ pub enum SchedulerError {
 }
 
 /// cr-018: job 运行时状态
+//
+// `Done(JobResult)` 会让 `Running` 变体也按 JobResult 栈大小对齐(clippy::large_enum_variant)。
+// 这里刻意内联:JobResult 的 stdout/stderr 数据在堆(栈上仅 Vec 指针),Running 条目数受
+// `max_concurrent` 上限约束,而终态 Done 无需为此额外堆分配。改 Box 会让每次终态写表多一次
+// alloc,收益(KB 级)不抵代价,故 allow。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum JobState {
     Running,

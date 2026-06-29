@@ -26,9 +26,9 @@ pub fn close_unneeded_fds(keep_fds: &[RawFd]) -> Result<(), CoreError> {
         }
     }
 
-    // 从 3 开始关闭（跳过 stdio）
-    for fd in 3..limit {
-        if !keep[fd] {
+    // 从 3 开始关闭（跳过 stdio）。enumerate 给出的下标即真实 fd 号,无需偏移。
+    for (fd, &should_keep) in keep.iter().enumerate().skip(3).take(limit.saturating_sub(3)) {
+        if !should_keep {
             unsafe {
                 libc::close(fd as RawFd);
             }

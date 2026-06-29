@@ -40,6 +40,14 @@ pub struct SessionInfo {
     pub execs: u64,
 }
 
+/// cr-033: 会话执行上下文(workspace + 绑定 profile + exec_lock + runner),tty handler 用。
+pub type SessionExecContext = (
+    JobWorkspace,
+    SandboxProfile,
+    Arc<tokio::sync::Mutex<()>>,
+    Arc<SandboxRunner>,
+);
+
 /// cr-028: 卷挂载声明(`workspace/<mount>` symlink → 卷目录)。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VolumeMount {
@@ -129,18 +137,7 @@ impl SessionManager {
     }
 
     /// cr-033: 暴露会话运行上下文(tty handler 用):workspace + profile + exec_lock + runner。
-    pub fn exec_context(
-        &self,
-        id: &str,
-    ) -> Result<
-        (
-            JobWorkspace,
-            SandboxProfile,
-            Arc<tokio::sync::Mutex<()>>,
-            Arc<SandboxRunner>,
-        ),
-        CoreError,
-    > {
+    pub fn exec_context(&self, id: &str) -> Result<SessionExecContext, CoreError> {
         let guard = self.sessions.read().expect("sessions lock poisoned");
         let e = guard
             .get(id)

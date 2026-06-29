@@ -112,16 +112,16 @@ fn detect_controllers(cgroup_path: &Path) -> Vec<CgroupController> {
     // 从 cgroup.controllers 读取
     if let Ok(content) = std::fs::read_to_string(cgroup_path.join("cgroup.controllers")) {
         let available: Vec<&str> = content.split_whitespace().collect();
-        if available.iter().any(|c| *c == "memory") {
+        if available.contains(&"memory") {
             controllers.push(CgroupController::Memory);
         }
-        if available.iter().any(|c| *c == "cpu") {
+        if available.contains(&"cpu") {
             controllers.push(CgroupController::Cpu);
         }
-        if available.iter().any(|c| *c == "pids") {
+        if available.contains(&"pids") {
             controllers.push(CgroupController::Pids);
         }
-        if available.iter().any(|c| *c == "io") {
+        if available.contains(&"io") {
             controllers.push(CgroupController::Io);
         }
     }

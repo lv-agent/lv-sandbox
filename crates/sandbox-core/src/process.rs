@@ -124,8 +124,8 @@ impl PreparedSandboxContext {
                     use std::os::unix::fs::MetadataExt;
                     if let Ok(meta) = workspace.metadata() {
                         let dev = meta.dev();
-                        io.major = (dev >> 8) as u64;
-                        io.minor = (dev & 0xff) as u64;
+                        io.major = dev >> 8;
+                        io.minor = dev & 0xff;
                     }
                 }
             }

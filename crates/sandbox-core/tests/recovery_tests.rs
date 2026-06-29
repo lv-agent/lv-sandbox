@@ -4,7 +4,6 @@
 
 use sandbox_core::recovery::RecoveryReport;
 use sandbox_core::sandbox_context::{SandboxConfig, SandboxRunner};
-use sandbox_core::workspace::WorkspaceManager;
 
 /// 空目录恢复应返回 0 清理
 #[tokio::test]
