@@ -109,6 +109,12 @@ impl SeccompProfile {
             .deny_network()
     }
 
+    /// cr-045: shell 运行时 allowlist profile(default KillProcess + 白名单)。
+    /// 与 `default_denylist()` 并存,opt-in(由 ProfileConfig.seccomp_mode 选择)。
+    pub fn default_allowlist_shell() -> Self {
+        crate::allowlist::shell()
+    }
+
     /// 添加拒绝规则
     pub fn deny(mut self, syscall: Syscall) -> Self {
         self.rules.push(SeccompRule {

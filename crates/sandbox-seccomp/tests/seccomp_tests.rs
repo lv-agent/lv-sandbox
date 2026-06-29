@@ -303,3 +303,42 @@ fn default_no_network_socket_blocked() {
         "socket() should be blocked by seccomp (process killed), actual output: {stdout}"
     );
 }
+
+// ==================== cr-045: allowlist 模式 ====================
+
+#[test]
+fn default_allowlist_shell_default_action_is_kill() {
+    let p = SeccompProfile::default_allowlist_shell();
+    assert!(matches!(p.default_action(), SeccompAction::KillProcess));
+}
+
+#[test]
+fn default_allowlist_shell_includes_basic_syscalls() {
+    let p = SeccompProfile::default_allowlist_shell();
+    // 关键:常规 syscall 必须在白名单(否则 echo 都跑不起来)
+    let names: Vec<String> = p
+        .rules()
+        .iter()
+        .filter_map(|r| match r.syscall {
+            Syscall::Custom(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect();
+    for need in ["read", "write", "openat", "close", "exit_group", "execve", "mmap"] {
+        assert!(
+            names.iter().any(|n| n == need),
+            "allowlist missing required syscall: {need}"
+        );
+    }
+}
+
+#[test]
+fn default_allowlist_shell_socket_af_unix_only() {
+    let p = SeccompProfile::default_allowlist_shell();
+    let socket_rule = p.rules().iter().find(|r| r.syscall == Syscall::Socket);
+    assert!(socket_rule.is_some(), "must have a socket rule");
+    let r = socket_rule.unwrap();
+    assert!(matches!(r.action, SeccompAction::Allow));
+    assert_eq!(r.conditions.len(), 1);
+    assert_eq!(r.conditions[0].value, libc::AF_UNIX as u64);
+}

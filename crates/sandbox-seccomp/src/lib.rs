@@ -10,6 +10,8 @@ pub mod filter;
 pub mod profile;
 pub mod syscall;
 
+mod allowlist;
+
 pub use error::SeccompError;
 pub use filter::PreparedFilter;
 pub use profile::{CompareOperator, SeccompAction, SeccompCondition, SeccompProfile, SeccompRule};
