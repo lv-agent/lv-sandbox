@@ -38,6 +38,15 @@ in `pre_exec` after environment capability detection):
 | **Timeout reaping** | On timeout/cancel the whole process group gets `SIGTERM` → `SIGKILL`; no orphaned background processes. |
 | **Output redaction** | `stdout`/`stderr` returned to the caller are scrubbed of common secret patterns (Bearer tokens, AWS `AKIA` keys, GitHub tokens, PEM private keys) so credentials a task reads don't leak into agent context. |
 
+**seccomp mode (opt-in, cr-045).** The default is a *denylist* — allow all
+syscalls, kill a blocklist of dangerous ones. A profile may instead set
+`seccomp_mode: allowlist`: default-deny (`KillProcess`) plus an observed
+allowlist of the syscalls the runtime actually needs. This closes the denylist's
+"any newly-added dangerous syscall is allowed by default" gap, at the cost of
+maintaining a complete per-runtime allowlist — an incomplete one kills the task
+with `SeccompDenied` / SIGSYS (observable, not silent). `fail_closed` is forced
+on for allowlist profiles. Phase 1 ships a shell allowlist; python/node follow.
+
 ## What it stops
 
 - A task reading/writing another task's files, or sensitive host files.

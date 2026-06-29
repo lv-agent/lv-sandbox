@@ -282,6 +282,10 @@ Prometheus text format (`text/plain; version=0.0.4`).
   task that exceeds it is reaped with `status: "DiskQuotaExceeded"`.
 - **`io.max`** (built-in profiles, cgroup v2) throttles disk I/O rate (200 MB/s
   read / 100 MB/s write by default) — prevents bandwidth starvation.
+- **`seccomp_mode`** (per profile, opt-in, cr-045) — set `seccomp_mode: allowlist`
+  to flip from the default denylist to default-deny + an observed syscall
+  allowlist (stronger; only `shell` in Phase 1). An incomplete allowlist kills the
+  task with `SeccompDenied` (SIGSYS); `fail_closed` is auto-enabled.
 - **`list_files: true`** on session exec returns a `files` array (path + size +
   MIME) in the response — see what was produced without a separate `files ls`.
 - **`POST /sessions/{id}/exec` + `?stream=true`** → SSE (same as `POST /jobs`).
