@@ -1,0 +1,46 @@
+name: ci
+# cr-046: push/PR 跑 lint + test(排除 e2e,需 cgroup)+ 镜像内 allowlist 验证。
+# e2e 在本地/特权环境跑,不在 CI。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install libseccomp-dev
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (0-warning gate)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test (exclude e2e — needs cgroup v2)
+        run: cargo test --workspace --exclude sandbox-e2e
+
+  image-allowlist:
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: build runtime image
+        run: docker build -t lv-sandbox:test .
+      - name: compile seccomp tests (bookworm glibc, 与 runtime 兼容)
+        run: |
+          docker run --rm -v "$PWD":/app -w /app rust:1-bookworm bash -lc '
+            apt-get update && apt-get install -y --no-install-recommends libseccomp-dev pkg-config &&
+            cargo test --no-run -p sandbox-seccomp
+          '
+      - name: run seccomp tests inside runtime image
+        run: |
+          set +e
+          BIN=$(find target/debug/deps -maxdepth 1 -name 'seccomp_tests-*' -type f -executable | head -1)
+          test -n "$BIN" || { echo "test binary not found in target/debug/deps"; ls -la target/debug/deps | head; exit 1; }
+          docker run -d --name t --entrypoint sleep lv-sandbox:test 600
+          docker cp "$BIN" t:/tmp/seccomp_tests
+          docker exec t /tmp/seccomp_tests
+          ec=$?
+          docker rm -f t >/dev/null
+          exit $ec
