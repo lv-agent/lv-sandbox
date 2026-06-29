@@ -195,6 +195,14 @@ impl Default for SandboxSection {
 
 // ==================== Profile 段 ====================
 
+/// cr-045: seccomp 模式。默认 Denylist(向后兼容);Allowlist = 默认拒 + 白名单(更强)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SeccompMode {
+    #[default]
+    Denylist,
+    Allowlist,
+}
+
 /// [profiles.xxx] 段（文件友好格式，所有字段 Optional）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
@@ -212,6 +220,9 @@ pub struct ProfileConfig {
     /// cr-025: template baseline 环境变量(覆盖核心非保护项;HOME/TMPDIR 保护)。
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+    /// cr-045: seccomp 模式。None/缺省 = Denylist(向后兼容)。
+    #[serde(default)]
+    pub seccomp_mode: Option<SeccompMode>,
 }
 
 /// rlimit 配置（文件友好，使用人类可读单位）
@@ -303,16 +314,39 @@ impl ProfileConfig {
             },
         };
 
+        // cr-045: seccomp 模式分发(默认 Denylist 向后兼容;Allowlist 仅 shell Phase 1)
+        let seccomp_profile = match self.seccomp_mode.unwrap_or_default() {
+            SeccompMode::Denylist => {
+                Some(sandbox_core::seccomp::SeccompProfile::default_denylist())
+            }
+            SeccompMode::Allowlist => {
+                if name == "shell" {
+                    Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_shell())
+                } else {
+                    tracing::warn!(
+                        profile = name,
+                        "seccomp_mode=allowlist only supported for 'shell' in Phase 1; falling back to denylist"
+                    );
+                    Some(sandbox_core::seccomp::SeccompProfile::default_denylist())
+                }
+            }
+        };
+        // cr-045: allowlist 强制 fail_closed(机制不可用拒执行,不降级到无过滤)
+        let fail_closed = match self.seccomp_mode.unwrap_or_default() {
+            SeccompMode::Allowlist => true,
+            SeccompMode::Denylist => sandbox_section.fail_closed,
+        };
+
         Ok(SandboxProfile {
             name: name.to_string(),
             rlimit,
             landlock_template,
-            seccomp_profile: Some(sandbox_core::seccomp::SeccompProfile::default_denylist()),
+            seccomp_profile,
             cgroup_resources: None, // 通过配置文件指定 cgroup 后续扩展
             max_stdout_bytes,
             max_stderr_bytes,
             default_timeout,
-            fail_closed: sandbox_section.fail_closed,
+            fail_closed,
             extra_readonly_paths,
             egress_allowlist: self.egress_allowlist.clone().unwrap_or_default(),
             disk_quota_mb: self.disk_quota_mb,

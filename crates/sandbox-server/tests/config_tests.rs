@@ -151,6 +151,7 @@ fn profile_config_to_sandbox_profile_default_fill() {
         egress_allowlist: None,
         disk_quota_mb: None,
         env: None,
+        seccomp_mode: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -192,6 +193,7 @@ fn profile_config_to_custom_values_override_defaults() {
             "PYTHONPATH".to_string(),
             "/opt/t".to_string(),
         )])),
+        seccomp_mode: None,
     };
 
     let sandbox_section = sandbox_server::config::SandboxSection::default();
@@ -550,4 +552,55 @@ async fn template_setup_executes_and_registers_profile() {
     assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "done");
     // profile 注册了
     assert!(runner.profile_registry().get("test-tmpl").is_some());
+}
+
+// ==================== cr-045: seccomp_mode ====================
+
+#[test]
+fn profile_config_seccomp_mode_defaults_to_denylist() {
+    use sandbox_server::config::{ProfileConfig, SandboxSection};
+    let pc = ProfileConfig {
+        rlimit: None,
+        extra_readonly_paths: None,
+        max_stdout_mb: None,
+        max_stderr_mb: None,
+        default_timeout: None,
+        egress_allowlist: None,
+        disk_quota_mb: None,
+        env: None,
+        seccomp_mode: None,
+    };
+    let profile = pc
+        .to_profile("shell", &SandboxSection::default())
+        .expect("to_profile");
+    let sp = profile.seccomp_profile.as_ref().expect("seccomp_profile set");
+    assert!(
+        matches!(sp.default_action(), sandbox_core::seccomp::SeccompAction::Allow),
+        "default mode must be denylist (Allow)"
+    );
+}
+
+#[test]
+fn profile_config_seccomp_mode_allowlist_shell_uses_allowlist() {
+    use sandbox_server::config::{ProfileConfig, SandboxSection, SeccompMode};
+    let pc = ProfileConfig {
+        rlimit: None,
+        extra_readonly_paths: None,
+        max_stdout_mb: None,
+        max_stderr_mb: None,
+        default_timeout: None,
+        egress_allowlist: None,
+        disk_quota_mb: None,
+        env: None,
+        seccomp_mode: Some(SeccompMode::Allowlist),
+    };
+    let profile = pc
+        .to_profile("shell", &SandboxSection::default())
+        .expect("to_profile");
+    let sp = profile.seccomp_profile.as_ref().expect("seccomp_profile set");
+    assert!(
+        matches!(sp.default_action(), sandbox_core::seccomp::SeccompAction::KillProcess),
+        "allowlist mode must default to KillProcess"
+    );
+    assert!(profile.fail_closed, "allowlist profile should be fail_closed");
 }
