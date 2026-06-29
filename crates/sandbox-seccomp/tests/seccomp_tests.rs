@@ -456,3 +456,48 @@ fn default_allowlist_shell_runs_realistic_workloads() {
     assert!(s.contains("hi 1"), "for-loop + var + pipe failed: {s}");
     assert!(s.contains("ALLDONE"), "ls/cat/redirect chain failed: {s}");
 }
+
+/// 回归(cr-045):allowlist 下常用命令(grep/sed/awk/find/head/tail/wc/sort/uniq/tr/cut/tee/
+/// heredoc/test)必须能跑——出厂 shell allowlist 须支持常用命令执行。
+/// 任一被 SIGSYS 杀(子进程继承 filter)则该条 assert 失败。
+#[test]
+fn default_allowlist_shell_runs_common_commands() {
+    let scripts: &[(&str, &str)] = &[
+        ("grep", "echo apple > /tmp/_al_g; grep apple /tmp/_al_g"),
+        ("sed", "echo apple > /tmp/_al_s; sed 's/a/A/' /tmp/_al_s"),
+        ("awk", "echo apple > /tmp/_al_a; awk '{print NR}' /tmp/_al_a"),
+        ("find", "find /tmp -maxdepth 1 -name '_al_g'"),
+        ("head", "echo apple > /tmp/_al_h; head -1 /tmp/_al_h"),
+        ("tail", "echo apple > /tmp/_al_t; tail -1 /tmp/_al_t"),
+        ("wc", "echo apple > /tmp/_al_w; wc -l /tmp/_al_w"),
+        ("sort", "echo apple > /tmp/_al_so; sort /tmp/_al_so"),
+        ("uniq", "printf 'a\\na\\n' > /tmp/_al_u; uniq /tmp/_al_u"),
+        ("tr", "echo abc > /tmp/_al_tr; tr a-z A-Z < /tmp/_al_tr"),
+        ("cut", "echo abc > /tmp/_al_c; cut -c1 /tmp/_al_c"),
+        ("tee", "echo abc > /tmp/_al_t1; tee /tmp/_al_t2 < /tmp/_al_t1 >/dev/null"),
+        ("heredoc", "cat <<'EOF'\nheredoc_ok\nEOF"),
+        ("test_bracket", "echo x > /tmp/_al_t3; test -f /tmp/_al_t3 && [ -f /tmp/_al_t3 ]"),
+    ];
+    for &(name, script) in scripts {
+        let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_shell())
+            .expect("prepare");
+        let out = unsafe {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .pre_exec(move || {
+                    prepared.apply().expect("apply");
+                    Ok(())
+                })
+                .output()
+                .expect("exec")
+        };
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "common command '{name}' failed/killed under allowlist: {:?}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

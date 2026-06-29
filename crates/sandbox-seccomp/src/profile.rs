@@ -154,6 +154,12 @@ impl SeccompProfile {
         self
     }
 
+    /// cr-045: 覆盖默认 action(builder,诊断/高级用)。
+    pub fn with_default_action(mut self, action: SeccompAction) -> Self {
+        self.default_action = action;
+        self
+    }
+
     /// 拒绝一切非 AF_UNIX 的网络（cr-019：AF_UNIX-only 受控出口基线）。
     ///
     /// 只对 `socket(domain != AF_UNIX)` KILL——任务物理上建不出 INET/RAW socket，

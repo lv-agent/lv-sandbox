@@ -35,11 +35,12 @@ const SHELL_ALLOWED: &[&str] = &[
     "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "rt_sigsuspend",
     "sigaltstack", "kill", "tgkill", "tkill", "setitimer", "getitimer",
     // 身份 / 时间 / 随机 / 限制
-    "getpid", "getppid", "getuid", "geteuid", "getgid", "getegid",
+    "getpid", "getppid", "getuid", "geteuid", "getgid", "getegid", "getgroups",
     "getpgrp", "getsid", "setpgid",
     "clock_gettime", "clock_getres", "gettimeofday",
     "nanosleep", "clock_nanosleep", "times",
-    "getrandom", "prlimit64", "getrlimit", "sysinfo", "uname",
+    "getrandom", "prlimit64", "getrlimit", "setrlimit", "sysinfo", "uname",
+    "sched_getaffinity", "sched_yield", "getrusage",
     // 同步 / 等待(shell job control / poll)
     "pselect6", "ppoll", "poll", "epoll_create1", "epoll_ctl", "epoll_wait",
     "eventfd2", "futex",
