@@ -29,7 +29,7 @@ jobs:
         run: docker build -t lv-sandbox:test .
       - name: compile seccomp tests (bookworm glibc, 与 runtime 兼容)
         run: |
-          docker run --rm -v "$PWD":/app -w /app rust:1-bookworm bash -lc '
+          docker run --rm -v "$PWD":/app -w /app rust:1-bookworm bash -c '
             apt-get update && apt-get install -y --no-install-recommends libseccomp-dev pkg-config &&
             cargo test --no-run -p sandbox-seccomp
           '
@@ -38,9 +38,9 @@ jobs:
           set +e
           BIN=$(find target/debug/deps -maxdepth 1 -name 'seccomp_tests-*' -type f -executable | head -1)
           test -n "$BIN" || { echo "test binary not found in target/debug/deps"; ls -la target/debug/deps | head; exit 1; }
-          docker run -d --name t --entrypoint sleep lv-sandbox:test 600
-          docker cp "$BIN" t:/tmp/seccomp_tests
-          docker exec t /tmp/seccomp_tests
+          docker run -d --name lvsb-test --entrypoint sleep lv-sandbox:test 600
+          docker cp "$BIN" lvsb-test:/tmp/seccomp_tests
+          docker exec lvsb-test /tmp/seccomp_tests
           ec=$?
-          docker rm -f t >/dev/null
+          docker rm -f lvsb-test >/dev/null
           exit $ec
