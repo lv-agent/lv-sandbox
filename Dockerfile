@@ -20,6 +20,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libseccomp2 ca-certificates curl python3 python3-pip nodejs npm \
+      grep sed gawk findutils \
  && rm -rf /var/lib/apt/lists/*
 # cr-020: 预装常用 python 库到 /usr/lib/python3/dist-packages
 # （该路径在 landlock 的 /usr/lib/python3 白名单内,且在 debian python sys.path 上,无需改 landlock）
