@@ -424,3 +424,35 @@ fn default_allowlist_shell_blocks_inet_socket() {
         "INET socket() must be killed under allowlist, got: {s}"
     );
 }
+
+/// 回归(扩展,cr-045):allowlist 下真实 shell 工作流必须能跑。
+/// Task 3 的 echo/printf 太窄;此测试覆盖管道/重定向/目录列举/文件读/循环/变量/子进程,
+/// 锁白名单对真实 shell 用法的完备性(漏 syscall → sh 被 SIGSYS 杀 → ALLDONE 缺失)。
+#[test]
+fn default_allowlist_shell_runs_realistic_workloads() {
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_shell())
+        .expect("prepare should not fail");
+    let out = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(
+                "x=hi; for i in 1 2; do echo $x $i; done | cat; \
+                 ls / >/dev/null; cat /etc/hostname >/dev/null; echo ALLDONE",
+            )
+            .pre_exec(move || {
+                prepared.apply().expect("apply should not fail");
+                Ok(())
+            })
+            .output()
+            .expect("exec failed")
+    };
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "realistic sh workload exited abnormally: {:?}",
+        out
+    );
+    assert!(s.contains("hi 1"), "for-loop + var + pipe failed: {s}");
+    assert!(s.contains("ALLDONE"), "ls/cat/redirect chain failed: {s}");
+}

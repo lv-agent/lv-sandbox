@@ -19,11 +19,14 @@ const SHELL_ALLOWED: &[&str] = &[
     // 文件 / IO
     "read", "write", "readv", "writev", "pread64", "pwrite64", "preadv", "pwritev",
     "open", "openat", "openat2", "close", "close_range",
-    "stat", "fstat", "lstat", "newfstatat", "lseek",
+    "stat", "fstat", "lstat", "newfstatat", "statx", "statfs", "fstatfs", "lseek",
     "access", "faccessat", "faccessat2", "readlink", "readlinkat",
     "dup", "dup2", "dup3", "fcntl", "flock", "ftruncate",
     "getcwd", "chdir", "fchdir", "umask",
     "pipe", "pipe2", "socketpair", "ioctl", "getdents64",
+    // 扩展属性(coreutils/libselinux 查 SELinux 标签用)
+    "getxattr", "lgetxattr", "fgetxattr", "listxattr", "llistxattr", "flistxattr",
+    "fadvise64",
     "utimensat", "futimens", "chmod", "fchmod", "fchmodat",
     "chown", "fchown", "lchown", "fchownat",
     "mkdir", "mkdirat", "rmdir", "unlink", "unlinkat",
