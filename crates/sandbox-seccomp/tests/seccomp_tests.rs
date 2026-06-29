@@ -57,6 +57,29 @@ fn denylist_with_clone_conditional_filter() {
     assert!(!rules[2].conditions.is_empty());
 }
 
+#[test]
+fn allow_with_conditions_adds_allow_rule_with_conditions() {
+    let profile = SeccompProfile::allowlist()
+        .allow_with_conditions(
+            Syscall::Socket,
+            vec![sandbox_seccomp::SeccompCondition {
+                arg_index: 0,
+                operator: sandbox_seccomp::CompareOperator::Equal,
+                value: libc::AF_UNIX as u64,
+                mask: None,
+            }],
+        );
+
+    let rules = profile.rules();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].syscall, Syscall::Socket);
+    assert!(
+        matches!(rules[0].action, SeccompAction::Allow),
+        "must be Allow not Kill"
+    );
+    assert_eq!(rules[0].conditions.len(), 1);
+}
+
 // ==================== PreparedFilter ====================
 
 #[test]

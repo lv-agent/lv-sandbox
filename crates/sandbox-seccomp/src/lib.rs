@@ -12,5 +12,5 @@ pub mod syscall;
 
 pub use error::SeccompError;
 pub use filter::PreparedFilter;
-pub use profile::{SeccompAction, SeccompCondition, SeccompProfile, SeccompRule};
+pub use profile::{CompareOperator, SeccompAction, SeccompCondition, SeccompProfile, SeccompRule};
 pub use syscall::Syscall;

@@ -133,6 +133,21 @@ impl SeccompProfile {
         self
     }
 
+    /// 添加带条件的允许规则（allowlist 模式用，如 socket(AF_UNIX) 放行）。
+    /// cr-045：对称于 `deny_with_conditions`，action = Allow。
+    pub fn allow_with_conditions(
+        mut self,
+        syscall: Syscall,
+        conditions: Vec<SeccompCondition>,
+    ) -> Self {
+        self.rules.push(SeccompRule {
+            syscall,
+            action: SeccompAction::Allow,
+            conditions,
+        });
+        self
+    }
+
     /// 拒绝一切非 AF_UNIX 的网络（cr-019：AF_UNIX-only 受控出口基线）。
     ///
     /// 只对 `socket(domain != AF_UNIX)` KILL——任务物理上建不出 INET/RAW socket，
