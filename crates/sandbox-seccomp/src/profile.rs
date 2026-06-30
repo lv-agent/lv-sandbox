@@ -120,6 +120,11 @@ impl SeccompProfile {
         crate::allowlist::python()
     }
 
+    /// cr-045 Phase 3: node 运行时 allowlist profile(default KillProcess + 白名单)。
+    pub fn default_allowlist_node() -> Self {
+        crate::allowlist::node()
+    }
+
     /// 添加拒绝规则
     pub fn deny(mut self, syscall: Syscall) -> Self {
         self.rules.push(SeccompRule {

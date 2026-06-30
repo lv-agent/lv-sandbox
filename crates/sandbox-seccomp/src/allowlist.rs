@@ -52,6 +52,11 @@ const PYTHON_EXTRA: &[&str] = &[
     "gettid", // cpython 启动查线程 id(dmesg syscall=186)
 ];
 
+/// node 运行时(V8)相对 shell 额外需要的 syscall。起步集;Phase 3 回归驱动补全。
+const NODE_EXTRA: &[&str] = &[
+    "gettid", // V8/node 启动查线程 id(同 python)
+];
+
 /// 通用 allowlist 构建(default KillProcess + 白名单 + socket AF_UNIX 条件放行)。
 fn build_profile(allowed: &[&'static str]) -> SeccompProfile {
     let mut p = SeccompProfile::allowlist();
@@ -79,5 +84,12 @@ pub(crate) fn shell() -> SeccompProfile {
 pub(crate) fn python() -> SeccompProfile {
     let mut all: Vec<&'static str> = SHELL_ALLOWED.to_vec();
     all.extend_from_slice(PYTHON_EXTRA);
+    build_profile(&all)
+}
+
+/// 构建 node 运行时 allowlist profile(shell 基础 + node 额外)。
+pub(crate) fn node() -> SeccompProfile {
+    let mut all: Vec<&'static str> = SHELL_ALLOWED.to_vec();
+    all.extend_from_slice(NODE_EXTRA);
     build_profile(&all)
 }
