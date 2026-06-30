@@ -319,17 +319,17 @@ impl ProfileConfig {
             SeccompMode::Denylist => {
                 Some(sandbox_core::seccomp::SeccompProfile::default_denylist())
             }
-            SeccompMode::Allowlist => {
-                if name == "shell" {
-                    Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_shell())
-                } else {
+            SeccompMode::Allowlist => match name {
+                "shell" => Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_shell()),
+                "python" => Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_python()),
+                other => {
                     tracing::warn!(
-                        profile = name,
-                        "seccomp_mode=allowlist only supported for 'shell' in Phase 1; falling back to denylist"
+                        profile = other,
+                        "seccomp_mode=allowlist only supported for 'shell'/'python' (Phase 1/2); falling back to denylist"
                     );
                     Some(sandbox_core::seccomp::SeccompProfile::default_denylist())
                 }
-            }
+            },
         };
         // cr-045: allowlist 强制 fail_closed(机制不可用拒执行,不降级到无过滤)
         let fail_closed = match self.seccomp_mode.unwrap_or_default() {

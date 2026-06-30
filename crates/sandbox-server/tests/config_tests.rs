@@ -604,3 +604,28 @@ fn profile_config_seccomp_mode_allowlist_shell_uses_allowlist() {
     );
     assert!(profile.fail_closed, "allowlist profile should be fail_closed");
 }
+
+#[test]
+fn profile_config_seccomp_mode_allowlist_python_uses_allowlist() {
+    use sandbox_server::config::{ProfileConfig, SandboxSection, SeccompMode};
+    let pc = ProfileConfig {
+        rlimit: None,
+        extra_readonly_paths: None,
+        max_stdout_mb: None,
+        max_stderr_mb: None,
+        default_timeout: None,
+        egress_allowlist: None,
+        disk_quota_mb: None,
+        env: None,
+        seccomp_mode: Some(SeccompMode::Allowlist),
+    };
+    let profile = pc
+        .to_profile("python", &SandboxSection::default())
+        .expect("to_profile");
+    let sp = profile.seccomp_profile.as_ref().expect("seccomp_profile set");
+    assert!(
+        matches!(sp.default_action(), sandbox_core::seccomp::SeccompAction::KillProcess),
+        "python allowlist must default to KillProcess"
+    );
+    assert!(profile.fail_closed, "allowlist profile should be fail_closed");
+}
