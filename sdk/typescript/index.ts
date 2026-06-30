@@ -371,7 +371,7 @@ class FilesClient {
 
   async put(sid: string, relPath: string, data: string | Uint8Array): Promise<void> {
     const body = typeof data === "string" ? new TextEncoder().encode(data) : data;
-    await this.c._bytes("PUT", `/api/v1/sessions/${sid}/files/${encodePath(relPath)}`, body);
+    await this.c._bytes("PUT", `/api/v1/sessions/${sid}/files/${encodePath(relPath)}`, body as BodyInit);
   }
 }
 
