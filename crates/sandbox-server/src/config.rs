@@ -322,10 +322,11 @@ impl ProfileConfig {
             SeccompMode::Allowlist => match name {
                 "shell" => Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_shell()),
                 "python" => Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_python()),
+                "node" => Some(sandbox_core::seccomp::SeccompProfile::default_allowlist_node()),
                 other => {
                     tracing::warn!(
                         profile = other,
-                        "seccomp_mode=allowlist only supported for 'shell'/'python' (Phase 1/2); falling back to denylist"
+                        "seccomp_mode=allowlist only supported for built-in 'shell'/'python'/'node'; falling back to denylist for custom profile"
                     );
                     Some(sandbox_core::seccomp::SeccompProfile::default_denylist())
                 }
