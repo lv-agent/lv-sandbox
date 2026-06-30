@@ -284,7 +284,7 @@ Prometheus text format (`text/plain; version=0.0.4`).
   read / 100 MB/s write by default) — prevents bandwidth starvation.
 - **`seccomp_mode`** (per profile, opt-in, cr-045) — set `seccomp_mode: allowlist`
   to flip from the default denylist to default-deny + an observed syscall
-  allowlist (stronger; only `shell` in Phase 1). An incomplete allowlist kills the
+  allowlist (stronger; `shell` + `python` in Phase 1/2). An incomplete allowlist kills the
   task with `SeccompDenied` (SIGSYS); `fail_closed` is auto-enabled.
 - **`list_files: true`** on session exec returns a `files` array (path + size +
   MIME) in the response — see what was produced without a separate `files ls`.

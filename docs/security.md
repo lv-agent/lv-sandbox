@@ -45,7 +45,7 @@ allowlist of the syscalls the runtime actually needs. This closes the denylist's
 "any newly-added dangerous syscall is allowed by default" gap, at the cost of
 maintaining a complete per-runtime allowlist — an incomplete one kills the task
 with `SeccompDenied` / SIGSYS (observable, not silent). `fail_closed` is forced
-on for allowlist profiles. Phase 1 ships a shell allowlist; python/node follow.
+on for allowlist profiles. Phase 1/2 ship shell + python allowlists; node follows.
 
 ## What it stops
 
