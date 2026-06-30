@@ -474,7 +474,9 @@ Notes:
 - Sessions **survive worker restart**: their state (workspace + bound profile)
   is rebuilt on startup, so a session id stays usable after a restart
   (reconnect). Snapshots and volumes also survive restart.
-- There is no background TTL reaper yet — clean up with an explicit `DELETE`.
+- Optional **TTL reaper** (cr-040): set `sandbox.session_ttl_secs` and sessions
+  idle past the TTL are destroyed automatically; otherwise clean up with an
+  explicit `DELETE`.
 
 ### Snapshots (fork a session)
 
@@ -618,12 +620,19 @@ server:
     path: "/var/log/sandbox/audit.jsonl"
   api_key: "secret-token"       # cr-023: Bearer token; unset = no auth (default)
   webhooks: []                    # cr-031: lifecycle webhook URLs; empty = off (default)
+  rate_limit:                   # cr-042: per-IP fixed-window rate limit (off by default)
+    enabled: false
+    requests_per_window: 60
+    window_secs: 60
+  otel_endpoint: null           # cr-039: OTel OTLP trace endpoint (e.g. "http://collector:4318"); null = off
+  shutdown_timeout_secs: 30     # cr-043: graceful shutdown — wait for in-flight jobs on SIGTERM (secs)
 
 sandbox:
   base_dir: "/sandboxes"        # task workspace root
   disk_watermark_mb: 1024       # disk watermark — reject new tasks below this (0 = disable)
   default_profile: "shell"
   fail_closed: true             # refuse to run when a security mechanism is unavailable
+  session_ttl_secs: null        # cr-040: idle session TTL; sessions unused past this are reaped (null = never)
 
 profiles:
   shell:
@@ -651,6 +660,7 @@ profiles:
     max_stdout_mb: 20
     default_timeout: "60s"
     disk_quota_mb: 100          # cr-022: workspace aggregate cap (MB); unset = unlimited
+    seccomp_mode: "denylist"    # cr-045: denylist (default) | allowlist (default-deny + whitelist; shell/python)
     extra_readonly_paths:
       - "/data/shared"
 ```

@@ -91,7 +91,7 @@ Each task runs in its own process group, layered with six isolation mechanisms:
 | Mechanism | Effect |
 |---|---|
 | **Landlock** | restricts filesystem access — a task can only read/write its own workspace; **/proc is scoped** to its own `/proc/self` + global info (cpuinfo/meminfo), not other tasks' `/proc/<pid>` |
-| **seccomp** | blocks dangerous syscalls (mount, ptrace, bpf, unshare, reboot, io_uring, …) **and restricts `socket()` to `AF_UNIX` only — a task cannot create a TCP/UDP socket at all; controlled egress is opt-in via an allowlisted UDS SOCKS5 proxy** (see [network-isolation.md](network-isolation.md)) |
+| **seccomp** | default **denylist** (allow all, kill a blocklist: mount/ptrace/bpf/unshare/reboot/io_uring/…) **and restricts `socket()` to `AF_UNIX` only** — a task cannot create a TCP/UDP socket; a profile may opt into `seccomp_mode: allowlist` (default-deny + observed syscall allowlist, stronger — cr-045). Controlled egress is opt-in via an allowlisted UDS SOCKS5 proxy (see [network-isolation.md](network-isolation.md)) |
 | **rlimit** | caps process-level resources (CPU, file count, process count, file size) |
 | **cgroup v2** | caps real task resource use (memory, CPU, pids); degrades gracefully if unavailable |
 | **Process hardening** | NoNewPrivs disables privilege escalation, setsid detaches the controlling terminal, leaked fds closed, env allowlist |

@@ -110,6 +110,8 @@ cargo build -p lv-cli
 - **生命周期 webhook** — 终态事件 POST 到你的 URL(免轮询)
 - **Bearer API 鉴权** — `server.api_key`(默认关,本地零摩擦)
 - **Prometheus 指标** + JSONL 审计日志 + `/health` 就绪检查
+- **seccomp allowlist 模式**(cr-045)— opt-in 默认拒 + 按运行时观察的白名单,比默认 denylist 更强(shell + python)
+- **运维加固** — 按 IP 速率限制、OTel trace 导出、SIGTERM 优雅关闭
 
 ## 文档
 

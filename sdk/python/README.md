@@ -2,7 +2,7 @@
 
 Thin Python client for [lv-sandbox](../../README.md): one-shot jobs, persistent
 sessions (files / snapshots / volumes), streaming stdout, and worker
-introspection. Mirrors the v0.3 HTTP API.
+introspection. Mirrors the v0.4 HTTP API.
 
 ## Install
 
@@ -49,4 +49,4 @@ s3 = lv.sessions.create(profile="shell", volumes=[{"name": "data", "mount": "vol
 - `lv.volumes.create / .list / .delete`
 - `lv.status() / .profiles()`
 
-Requires a running lv-sandbox server (v0.3+) and `httpx`.
+Requires a running lv-sandbox server (v0.4+) and `httpx`.

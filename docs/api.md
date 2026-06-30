@@ -103,6 +103,12 @@ When done:
 | `Cancelled` | cancelled via `POST /jobs/{id}/cancel` |
 | `Error` | sandbox/init error |
 
+> **Sandbox violations (cr-041)**: a `Killed` result may carry
+> `sandbox_violations` detailing the cause — `SeccompDenied` (SIGSYS: the task
+> called a blocked syscall) or `OomKill` (cgroup OOM). These surface in the
+> result, metrics (`sandbox_job_seccomp_denied_total` / `sandbox_job_oom_killed_total`),
+> and the audit log.
+
 **Errors**: `404 Not Found` — task unknown or already evicted.
 
 ---
@@ -118,8 +124,8 @@ Cancel a running task. The process group receives `SIGTERM` then `SIGKILL`.
 | Status | Body | When |
 |---|---|---|
 | `200 OK` | `{"job_id": "...", "status": "Cancelled"}` | cancelled |
-| `404 Not Found` | `{"error": "任务不存在"}` | unknown job |
-| `409 Conflict` | `{"error": "任务已完成,无法取消"}` | already finished |
+| `404 Not Found` | `{"error": "job not found"}` | unknown job |
+| `409 Conflict` | `{"error": "job already finished, cannot cancel"}` | already finished |
 
 ---
 
@@ -257,6 +263,7 @@ Prometheus text format (`text/plain; version=0.0.4`).
 | `sandbox_job_seccomp_denied_total` | counter | jobs killed by seccomp (SIGSYS) |
 | `sandbox_job_oom_killed_total` | counter | jobs killed by cgroup OOM killer |
 | `sandbox_job_queue_depth` | gauge | jobs waiting for semaphore permit |
+| `sandbox_rate_limit_denied_total` | counter | requests rejected by per-IP rate limit (cr-042) |
 
 ---
 

@@ -120,6 +120,8 @@ No container per task. No `--privileged`. No outbound network by default.
 - **Lifecycle webhooks** — terminal events POSTed to your URL (no polling)
 - **Bearer API auth** — `server.api_key` (default off, zero local friction)
 - **Prometheus metrics** + JSONL audit log + `/health` readiness
+- **seccomp allowlist mode** (cr-045) — opt-in default-deny + per-runtime syscall allowlist, stronger than the default denylist (shell + python)
+- **Operational hardening** — per-IP rate limiting, OTel tracing export, graceful SIGTERM shutdown
 
 ## Documentation
 

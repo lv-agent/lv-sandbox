@@ -9,6 +9,9 @@ are allowed in minor bumps).
 
 ### Added
 
+- **seccomp allowlist mode (cr-045)** — profiles can opt into `seccomp_mode:
+  allowlist` (default-deny + observed syscall allowlist, stronger than the
+  default denylist; Phase 1/2 ship shell + python, node follows).
 - **TypeScript/JS SDK (cr-044)** — `lvsandbox` npm package, zero dependencies.
 - **Graceful shutdown (cr-043)** — on `SIGTERM`, the server waits for in-flight
   jobs to finish (configurable timeout, default 30s) before exiting.
