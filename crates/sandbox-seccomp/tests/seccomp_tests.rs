@@ -501,3 +501,109 @@ fn default_allowlist_shell_runs_common_commands() {
         );
     }
 }
+
+// ==================== cr-045 Phase 2: python allowlist ====================
+
+#[test]
+fn default_allowlist_python_default_action_is_kill() {
+    let p = SeccompProfile::default_allowlist_python();
+    assert!(matches!(p.default_action(), SeccompAction::KillProcess));
+}
+
+#[test]
+fn default_allowlist_python_includes_gettid() {
+    let p = SeccompProfile::default_allowlist_python();
+    let names: Vec<String> = p
+        .rules()
+        .iter()
+        .filter_map(|r| match r.syscall {
+            Syscall::Custom(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.iter().any(|n| n == "gettid"), "python allowlist must include gettid");
+    for need in ["read", "write", "openat", "mmap", "execve"] {
+        assert!(names.iter().any(|n| n == need), "python allowlist missing {need}");
+    }
+}
+
+/// 回归:python 典型脚本在 allowlist 下必须能跑(print + import + file IO)。
+/// 白名单漏 syscall → python 被 SIGSYS 杀 → 输出缺失。
+#[test]
+fn default_allowlist_python_runs_typical_script() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_python())
+        .expect("prepare");
+    let script = "python3 -c 'import os, sys; print(\"py_ok\", os.getcwd()); \
+                  open(\"/tmp/_al_py\", \"w\").write(\"x\"); print(\"io_ok\")'";
+    let out = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .pre_exec(move || {
+                prepared.apply().expect("apply");
+                Ok(())
+            })
+            .output()
+            .expect("exec")
+    };
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "python killed/failed under allowlist: {:?}\nstderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(s.contains("py_ok"), "python print failed: {s}");
+    assert!(s.contains("io_ok"), "python file IO failed: {s}");
+}
+
+/// 回归(cr-045 P2):python 常用库(json/re)+ 子进程在 allowlist 下能跑。
+/// 吸取 Phase 1 教训(初始测试太窄),覆盖 C 扩展(json/re)+ fork-exec(os.system)。
+#[test]
+fn default_allowlist_python_runs_realistic() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no python3");
+        return;
+    }
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_python())
+        .expect("prepare");
+    let script = "python3 -c 'import json, re, os; \
+                  print(\"json_ok\", json.dumps({\"k\": 1})); \
+                  print(\"re_ok\", re.match(\"a\", \"abc\").group()); \
+                  os.system(\"echo sub_ok\")'";
+    let out = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .pre_exec(move || {
+                prepared.apply().expect("apply");
+                Ok(())
+            })
+            .output()
+            .expect("exec")
+    };
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "python realistic killed: {:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(s.contains("json_ok"), "json failed: {s}");
+    assert!(s.contains("re_ok"), "re failed: {s}");
+    assert!(s.contains("sub_ok"), "subprocess(os.system) failed: {s}");
+}
