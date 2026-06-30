@@ -46,10 +46,16 @@ const SHELL_ALLOWED: &[&str] = &[
     "eventfd2", "futex",
 ];
 
-/// 构建 shell 运行时 allowlist profile。
-pub(crate) fn shell() -> SeccompProfile {
+/// python 运行时(cpython)相对 shell 额外需要的 syscall。
+/// 起步集(dmesg 已见 gettid);Phase 2 回归测试驱动补全。
+const PYTHON_EXTRA: &[&str] = &[
+    "gettid", // cpython 启动查线程 id(dmesg syscall=186)
+];
+
+/// 通用 allowlist 构建(default KillProcess + 白名单 + socket AF_UNIX 条件放行)。
+fn build_profile(allowed: &[&'static str]) -> SeccompProfile {
     let mut p = SeccompProfile::allowlist();
-    for &name in SHELL_ALLOWED {
+    for &name in allowed {
         p = p.allow(Syscall::Custom(name));
     }
     // cr-019 网络基线:只放行 AF_UNIX socket(INET socket 命中 default KillProcess)
@@ -62,4 +68,16 @@ pub(crate) fn shell() -> SeccompProfile {
             mask: None,
         }],
     )
+}
+
+/// 构建 shell 运行时 allowlist profile。
+pub(crate) fn shell() -> SeccompProfile {
+    build_profile(SHELL_ALLOWED)
+}
+
+/// 构建 python 运行时 allowlist profile(shell 基础 + python 额外)。
+pub(crate) fn python() -> SeccompProfile {
+    let mut all: Vec<&'static str> = SHELL_ALLOWED.to_vec();
+    all.extend_from_slice(PYTHON_EXTRA);
+    build_profile(&all)
 }
