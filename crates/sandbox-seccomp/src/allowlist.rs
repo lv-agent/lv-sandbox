@@ -55,6 +55,7 @@ const PYTHON_EXTRA: &[&str] = &[
 /// node 运行时(V8)相对 shell 额外需要的 syscall。起步集;Phase 3 回归驱动补全。
 const NODE_EXTRA: &[&str] = &[
     "gettid", // V8/node 启动查线程 id(同 python)
+    "capget", // V8 启动查进程 capabilities(dmesg syscall=125)
 ];
 
 /// 通用 allowlist 构建(default KillProcess + 白名单 + socket AF_UNIX 条件放行)。
