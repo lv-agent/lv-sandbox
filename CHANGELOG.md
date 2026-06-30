@@ -7,6 +7,10 @@ are allowed in minor bumps).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.0] — 2026-06-30
+
 ### Added
 
 - **seccomp allowlist mode (cr-045)** — profiles can opt into `seccomp_mode:
