@@ -643,7 +643,7 @@ fn default_allowlist_node_runs_typical_script() {
         return;
     };
     let ver = String::from_utf8_lossy(&ver_out.stdout);
-    // node 22+ 的 libuv 启动即 io_uring_setup;沙箱禁 io_uring(逃逸面 + bypass seccomp)
+    // node 22+ libuv 启动即 io_uring_setup;沙箱禁 io_uring(逃逸面 + bypass seccomp)
     // → node 22+ 在沙箱完全不可用。生产镜像 node 18(bookworm,无 io_uring)allowlist OK;
     // host nvm node 22+ skip,镜像内 node 18 由 CI Job B 验证。
     let major = ver
@@ -662,7 +662,9 @@ fn default_allowlist_node_runs_typical_script() {
     }
     let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_node())
         .expect("prepare");
-    let script = "node -e 'console.log(\"node_ok\"); \
+    let script = "node -e 'const fs=require(\"fs\"); \
+                  fs.writeFileSync(\"/tmp/_al_node\",\"x\"); \
+                  console.log(\"node_ok\", fs.readFileSync(\"/tmp/_al_node\",\"utf8\")); \
                   console.log(\"crypto_ok\", require(\"crypto\").randomBytes(4).toString(\"hex\"))'";
     let out = unsafe {
         Command::new("/bin/sh")

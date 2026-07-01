@@ -170,6 +170,17 @@ impl SeccompProfile {
         self
     }
 
+    /// 添加 errno 规则(syscall 返回 -1/errno 不杀进程;用于能力探测如 io_uring,
+    /// 让 libuv/glibc 探测失败回退,而非 KILL)。cr-045 P3。
+    pub fn errno(mut self, syscall: Syscall, errno: u32) -> Self {
+        self.rules.push(SeccompRule {
+            syscall,
+            action: SeccompAction::Errno(errno),
+            conditions: Vec::new(),
+        });
+        self
+    }
+
     /// 拒绝一切非 AF_UNIX 的网络（cr-019：AF_UNIX-only 受控出口基线）。
     ///
     /// 只对 `socket(domain != AF_UNIX)` KILL——任务物理上建不出 INET/RAW socket，
