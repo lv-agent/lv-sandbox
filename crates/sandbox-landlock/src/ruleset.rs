@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use landlock::{
-    Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreated,
+    Access, AccessFs, AccessNet, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreated,
     RulesetCreatedAttr, ABI,
 };
 
@@ -37,10 +37,18 @@ impl PreparedRuleset {
         // 获取当前 ABI 对应的完整文件系统访问权限集
         let all_access = AccessFs::from_all(abi);
 
-        // 创建 ruleset：处理所有已知的文件系统访问
-        let mut created = Ruleset::default()
+        // 创建 ruleset：处理文件系统访问
+        let mut ruleset = Ruleset::default()
             .handle_access(all_access)
-            .map_err(|e| LandlockError::RulesetCreate(format!("{e}")))?
+            .map_err(|e| LandlockError::RulesetCreate(format!("{e}")))?;
+        // cr-048: Landlock 网络规则(ABI v5+,deny bind/connect,defense-in-depth 叠在 seccomp 外)
+        if caps.network_socket {
+            let net_access = AccessNet::from_all(abi);
+            ruleset = ruleset
+                .handle_access(net_access)
+                .map_err(|e| LandlockError::RulesetCreate(format!("net handle_access: {e}")))?;
+        }
+        let mut created = ruleset
             .create()
             .map_err(|e| LandlockError::RulesetCreate(format!("{e}")))?;
 
