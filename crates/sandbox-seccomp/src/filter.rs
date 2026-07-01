@@ -7,9 +7,9 @@ use crate::profile::{CompareOperator, SeccompAction as OurAction, SeccompProfile
 
 /// 预编译的 seccomp BPF 程序。
 ///
-/// `prepare()` 阶段使用 libseccomp 编译 filter 并导出 BPF 字节码。
-/// `apply()` 阶段通过 `prctl(PR_SET_NO_NEW_PRIVS)` + `seccomp(SECCOMP_SET_MODE_FILTER)`
-/// 加载字节码，只做 syscall，不依赖 libseccomp 上下文对象（Send + Sync 安全）。
+/// `prepare()` 用 libseccomp 编译 filter 并导出 BPF 字节码。
+/// `apply()` 通过 `prctl(PR_SET_NO_NEW_PRIVS)` + `seccomp(SECCOMP_SET_MODE_FILTER)`
+/// 加载字节码,只做 syscall,不依赖 libseccomp 上下文对象(Send + Sync 安全)。
 pub struct PreparedFilter {
     bpf_program: Vec<libc::sock_filter>,
 }
@@ -18,19 +18,16 @@ unsafe impl Send for PreparedFilter {}
 unsafe impl Sync for PreparedFilter {}
 
 impl PreparedFilter {
-    /// 从 SeccompProfile 编译 BPF 程序。
-    /// 此方法会进行内存分配，必须在 fork 前调用。
+    /// 从 SeccompProfile 编译 BPF。fork 前调用(会分配内存)。
     pub fn prepare(profile: &SeccompProfile) -> Result<Self, SeccompError> {
         let default_action = our_action_to_scmp(profile.default_action());
 
         let mut ctx = ScmpFilterContext::new_filter(default_action)
             .map_err(|e| SeccompError::FilterCreate(format!("{e}")))?;
 
-        // 设置 NO_NEW_PRIVS
         ctx.set_ctl_nnp(true)
             .map_err(|e| SeccompError::FilterCreate(format!("set_ctl_nnp: {e}")))?;
 
-        // 添加每条规则
         for rule in profile.rules() {
             let syscall = match syscall_to_scmp(&rule.syscall) {
                 Ok(s) => s,
@@ -66,18 +63,14 @@ impl PreparedFilter {
             }
         }
 
-        // 导出 BPF 字节码（通过 pipe）
+        // 导出 BPF 字节码(经 pipe)
         let (read_fd, write_fd) = nix::unistd::pipe()
             .map_err(|e| SeccompError::FilterCreate(format!("pipe: {e}")))?;
-
-        // 写端：导出 BPF
         {
             let mut write_file = std::fs::File::from(write_fd);
             ctx.export_bpf(&mut write_file)
                 .map_err(|e| SeccompError::FilterCreate(format!("export_bpf: {e}")))?;
         }
-
-        // 读端：读取字节码
         let mut bpf_bytes = Vec::new();
         {
             let mut read_file = std::fs::File::from(read_fd);
@@ -87,13 +80,11 @@ impl PreparedFilter {
         }
 
         let bpf_program = bytes_to_sock_filters(&bpf_bytes)?;
-
         Ok(Self { bpf_program })
     }
 
-    /// 应用 seccomp filter 到当前进程。
-    /// 必须在 pre_exec 闭包中调用（fork 后、exec 前）。
-    /// 只做 syscall：prctl(PR_SET_NO_NEW_PRIVS) + seccomp(SECCOMP_SET_MODE_FILTER)。
+    /// 应用 filter 到当前进程(pre_exec)。
+    /// 只做 syscall:prctl(PR_SET_NO_NEW_PRIVS) + seccomp(SECCOMP_SET_MODE_FILTER)。
     pub fn apply(&self) -> Result<(), SeccompError> {
         let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
         if ret < 0 {
@@ -127,10 +118,9 @@ impl PreparedFilter {
     }
 }
 
-/// 将导出的 BPF 字节码转为 `sock_filter` 结构体数组
+/// 将导出的 BPF 字节码转为 sock_filter 数组
 fn bytes_to_sock_filters(bytes: &[u8]) -> Result<Vec<libc::sock_filter>, SeccompError> {
-    // sock_filter: code(u16) + jt(u8) + jf(u8) + k(u32) = 8 字节
-    const SF_SIZE: usize = 8;
+    const SF_SIZE: usize = 8; // code(u16) + jt(u8) + jf(u8) + k(u32)
     if bytes.len() % SF_SIZE != 0 {
         return Err(SeccompError::FilterCreate(format!(
             "BPF bytecode length {} is not a multiple of {}",
@@ -138,20 +128,15 @@ fn bytes_to_sock_filters(bytes: &[u8]) -> Result<Vec<libc::sock_filter>, Seccomp
             SF_SIZE
         )));
     }
-
-    let count = bytes.len() / SF_SIZE;
-    let mut filters = Vec::with_capacity(count);
-
+    let mut filters = Vec::with_capacity(bytes.len() / SF_SIZE);
     for chunk in bytes.chunks_exact(SF_SIZE) {
-        let sf = libc::sock_filter {
+        filters.push(libc::sock_filter {
             code: u16::from_ne_bytes([chunk[0], chunk[1]]),
             jt: chunk[2],
             jf: chunk[3],
             k: u32::from_ne_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
-        };
-        filters.push(sf);
+        });
     }
-
     Ok(filters)
 }
 
@@ -188,7 +173,6 @@ fn syscall_to_scmp(syscall: &crate::syscall::Syscall) -> Result<ScmpSyscall, Str
         crate::syscall::Syscall::Swapoff => "swapoff",
         crate::syscall::Syscall::Sethostname => "sethostname",
         crate::syscall::Syscall::Setdomainname => "setdomainname",
-        // 网络 socket API（cr-016 默认禁网）
         crate::syscall::Syscall::Socket => "socket",
         crate::syscall::Syscall::Socketpair => "socketpair",
         crate::syscall::Syscall::Connect => "connect",

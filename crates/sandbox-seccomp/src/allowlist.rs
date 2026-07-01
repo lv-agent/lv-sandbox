@@ -65,6 +65,7 @@ fn build_profile(allowed: &[&'static str]) -> SeccompProfile {
         p = p.allow(Syscall::Custom(name));
     }
     // cr-019 网络基线:只放行 AF_UNIX socket(INET socket 命中 default KillProcess)
+    // 注:io_uring ENOSYS 由 filter.rs 手写 BPF splice(cr-047,绕 libseccomp BPF 生成 bug)
     p.allow_with_conditions(
         Syscall::Socket,
         vec![SeccompCondition {

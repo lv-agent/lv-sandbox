@@ -106,6 +106,11 @@ templates:
 - Linux, host kernel ≥ 5.13 (Landlock)
 - **Docker**: only Docker is needed — the image ships the rest
 - **Source build**: Rust 1.75+, `libseccomp-dev` (build) / `libseccomp2` (run)
+- **Node.js 22+ tasks** (cr-047): set host `kernel.io_uring_disabled=2` (`sysctl -w` or
+  persist in `/etc/sysctl.d/`). node 22+ libuv probes io_uring at startup; the default
+  denylist allows `io_uring_setup` and relies on this sysctl to return ENOSYS (libuv then
+  falls back to epoll). Without it, io_uring is usable by tasks. See
+  [Security · seccomp mode](security.md).
 - Recommended to run as a non-root user inside a container (see [Architecture · Recommended deployment](architecture.md#recommended-deployment))
 
 ## Build & run

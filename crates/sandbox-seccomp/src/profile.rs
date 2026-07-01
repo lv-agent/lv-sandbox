@@ -101,10 +101,9 @@ impl SeccompProfile {
             .deny(Syscall::Ioperm)
             .deny(Syscall::PerfEventOpen)
             .deny(Syscall::Userfaultfd)
-            // io_uring
-            .deny(Syscall::IoUringSetup)
-            .deny(Syscall::IoUringEnter)
-            .deny(Syscall::IoUringRegister)
+            // io_uring_setup:denylist 不 deny(allow)—— host 用 kernel.io_uring_disabled=2
+            // 在内核层禁(cr-047:seccomp deny 会先于 sysctl 杀进程,故 allow 让内核返回 ENOSYS)。
+            // 无 sysctl 时 io_uring 可用(不安全),部署文档要求 host 设 io_uring_disabled=2。
             // 网络 socket API（cr-016 默认禁网）
             .deny_network()
     }

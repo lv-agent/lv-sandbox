@@ -46,9 +46,14 @@ allowlist of the syscalls the runtime actually needs. This closes the denylist's
 maintaining a complete per-runtime allowlist — an incomplete one kills the task
 with `SeccompDenied` / SIGSYS (observable, not silent). `fail_closed` is forced
 on for allowlist profiles. Phase 1/2/3 ship shell + python + node allowlists.
-**Caveat (cr-045 P3): node 22+ libuv probes `io_uring_setup` at startup; the sandbox
-blocks io_uring (known escape / seccomp-bypass surface) → node 22+ won't start under
-the sandbox. Use node 18/20 (the Debian bookworm image default — no io_uring).**
+**Node.js 22+ and io_uring (cr-047):** node 22+ libuv probes `io_uring_setup` at startup.
+The **denylist** (default) lets `io_uring_setup` pass seccomp and relies on the **host
+`kernel.io_uring_disabled=2`** to return ENOSYS at the kernel layer — libuv then falls
+back to epoll. Set it on the host in production: `sysctl -w kernel.io_uring_disabled=2`
+(without it io_uring is usable by tasks = escape surface). **allowlist mode** (default
+KILL) cannot support node 22+ — a kernel seccomp bug makes default-KILL + ERRNO rules
+ineffective, so node 22+ under allowlist is killed; use denylist + sysctl, or node 18/20
+(no io_uring). See `veps/cr-047-libseccomp-issue.md`.
 
 ## What it stops
 

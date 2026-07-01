@@ -633,8 +633,9 @@ fn default_allowlist_node_includes_gettid() {
     }
 }
 
-/// 回归:node 典型脚本在 allowlist 下必须能跑(console + fs + crypto)。
-/// 白名单漏 syscall → node 被 SIGSYS 杀 → 输出缺失。
+/// node allowlist(default KILL)实跑:node 22+ 用 io_uring,allowlist default KILL
+/// 命中 io_uring_setup → 杀进程(内核 seccomp bug:default KILL 下 ERRNO rule 不生效,cr-047)。
+/// 故 node 22+ allowlist 不支持;node 18/20(无 io_uring)实跑。
 #[test]
 fn default_allowlist_node_runs_typical_script() {
     let ver_out = std::process::Command::new("node").arg("--version").output();
@@ -643,9 +644,6 @@ fn default_allowlist_node_runs_typical_script() {
         return;
     };
     let ver = String::from_utf8_lossy(&ver_out.stdout);
-    // node 22+ libuv 启动即 io_uring_setup;沙箱禁 io_uring(逃逸面 + bypass seccomp)
-    // → node 22+ 在沙箱完全不可用。生产镜像 node 18(bookworm,无 io_uring)allowlist OK;
-    // host nvm node 22+ skip,镜像内 node 18 由 CI Job B 验证。
     let major = ver
         .trim()
         .trim_start_matches('v')
@@ -655,12 +653,53 @@ fn default_allowlist_node_runs_typical_script() {
         .unwrap_or(0);
     if major >= 22 {
         eprintln!(
-            "skipping: node {} uses io_uring (sandbox blocks io_uring; node 18/20 image OK)",
+            "skipping: node {} uses io_uring; allowlist (default KILL) kills it (kernel seccomp bug, cr-047). \
+             node 22+ 用 denylist(默认)+ host kernel.io_uring_disabled=2。",
             ver.trim()
         );
         return;
     }
     let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_node())
+        .expect("prepare");
+    let script = "node -e 'console.log(\"node_ok\"); \
+                  console.log(\"crypto_ok\", require(\"crypto\").randomBytes(4).toString(\"hex\"))'";
+    let out = unsafe {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .pre_exec(move || {
+                prepared.apply().expect("apply");
+                Ok(())
+            })
+            .output()
+            .expect("exec")
+    };
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "node killed under allowlist: {:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(s.contains("node_ok"), "node console failed: {s}");
+    assert!(s.contains("crypto_ok"), "node crypto failed: {s}");
+}
+
+/// 回归:node 在 denylist(默认)下跑——denylist 不 deny io_uring_setup(allow),
+/// node 22+ 的 io_uring_setup 经 seccomp allow → 内核(host kernel.io_uring_disabled=2
+/// 返回 ENOSYS,libuv 回退;无 sysctl 时 io_uring 可用,任务仍跑)。cr-047。
+#[test]
+fn default_denylist_node_runs_typical_script() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no node");
+        return;
+    }
+    let prepared = PreparedFilter::prepare(&SeccompProfile::default_denylist())
         .expect("prepare");
     let script = "node -e 'const fs=require(\"fs\"); \
                   fs.writeFileSync(\"/tmp/_al_node\",\"x\"); \
@@ -681,10 +720,11 @@ fn default_allowlist_node_runs_typical_script() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "node killed/failed under allowlist: {:?}\nstderr: {}",
+        "node killed under denylist: {:?}\n{}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(s.contains("node_ok"), "node console/fs failed: {s}");
     assert!(s.contains("crypto_ok"), "node crypto failed: {s}");
 }
+
