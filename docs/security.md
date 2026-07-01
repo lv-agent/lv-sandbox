@@ -45,7 +45,10 @@ allowlist of the syscalls the runtime actually needs. This closes the denylist's
 "any newly-added dangerous syscall is allowed by default" gap, at the cost of
 maintaining a complete per-runtime allowlist — an incomplete one kills the task
 with `SeccompDenied` / SIGSYS (observable, not silent). `fail_closed` is forced
-on for allowlist profiles. Phase 1/2 ship shell + python allowlists; node follows.
+on for allowlist profiles. Phase 1/2/3 ship shell + python + node allowlists.
+**Caveat (cr-045 P3): node 22+ libuv probes `io_uring_setup` at startup; the sandbox
+blocks io_uring (known escape / seccomp-bypass surface) → node 22+ won't start under
+the sandbox. Use node 18/20 (the Debian bookworm image default — no io_uring).**
 
 ## What it stops
 
