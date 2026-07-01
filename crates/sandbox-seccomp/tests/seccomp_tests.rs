@@ -633,58 +633,10 @@ fn default_allowlist_node_includes_gettid() {
     }
 }
 
-/// node allowlist(default KILL)实跑:node 22+ 用 io_uring,allowlist default KILL
-/// 命中 io_uring_setup → 杀进程(内核 seccomp bug:default KILL 下 ERRNO rule 不生效,cr-047)。
-/// 故 node 22+ allowlist 不支持;node 18/20(无 io_uring)实跑。
-#[test]
-fn default_allowlist_node_runs_typical_script() {
-    let ver_out = std::process::Command::new("node").arg("--version").output();
-    let Ok(ver_out) = ver_out else {
-        eprintln!("skipping: no node");
-        return;
-    };
-    let ver = String::from_utf8_lossy(&ver_out.stdout);
-    let major = ver
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0);
-    if major >= 22 {
-        eprintln!(
-            "skipping: node {} uses io_uring; allowlist (default KILL) kills it (kernel seccomp bug, cr-047). \
-             node 22+ 用 denylist(默认)+ host kernel.io_uring_disabled=2。",
-            ver.trim()
-        );
-        return;
-    }
-    let prepared = PreparedFilter::prepare(&SeccompProfile::default_allowlist_node())
-        .expect("prepare");
-    let script = "node -e 'console.log(\"node_ok\"); \
-                  console.log(\"crypto_ok\", require(\"crypto\").randomBytes(4).toString(\"hex\"))'";
-    let out = unsafe {
-        Command::new("/bin/sh")
-            .arg("-c")
-            .arg(script)
-            .pre_exec(move || {
-                prepared.apply().expect("apply");
-                Ok(())
-            })
-            .output()
-            .expect("exec")
-    };
-    let s = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "node killed under allowlist: {:?}\n{}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(s.contains("node_ok"), "node console failed: {s}");
-    assert!(s.contains("crypto_ok"), "node crypto failed: {s}");
-}
+// default_allowlist_node_runs_typical_script removed (cr-047):
+// allowlist (default KILL) cannot support node 22+ — kernel seccomp bug
+// makes default-KILL + ERRNO rules ineffective. Node 22+ under allowlist is
+// permanently skipped; use denylist (default) + host io_uring_disabled=2.
 
 /// 回归:node 在 denylist(默认)下跑——denylist 不 deny io_uring_setup(allow),
 /// node 22+ 的 io_uring_setup 经 seccomp allow → 内核(host kernel.io_uring_disabled=2
