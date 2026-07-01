@@ -22,9 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libseccomp2 ca-certificates curl python3 python3-pip nodejs npm \
       grep sed gawk findutils \
  && rm -rf /var/lib/apt/lists/*
-# cr-020: 预装常用 python 库到 /usr/lib/python3/dist-packages
-# （该路径在 landlock 的 /usr/lib/python3 白名单内,且在 debian python sys.path 上,无需改 landlock）
-RUN python3 -m pip install --break-system-packages --target /usr/lib/python3/dist-packages --no-cache-dir requests httpx
+# cr-020: 预装基础 python 库(requests/httpx)+ cr-049: 数据科学栈(numpy/pandas/matplotlib/scikit-learn)
+# 安装到 /usr/lib/python3/dist-packages(landlock 白名单内,不用改 landlock)
+RUN python3 -m pip install --break-system-packages --target /usr/lib/python3/dist-packages --no-cache-dir \
+    numpy pandas matplotlib scikit-learn requests httpx
 # 非 root 用户（uid 10000），与 docs/architecture.md 推荐部署对齐
 RUN groupadd --gid 10000 sandbox && \
     useradd --uid 10000 --gid 10000 --create-home --shell /usr/sbin/nologin sandbox
