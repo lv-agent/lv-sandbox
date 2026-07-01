@@ -16,13 +16,22 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p sandbox-server -p sandbox-mcp && \
     cp /app/target/release/sandbox-server /app/target/release/sandbox-mcp /usr/local/bin/
 
-# ---- runtime：运行阶段（libseccomp2 + curl + python3/node 运行时）----
+# ---- runtime：运行阶段（Node.js 24 + libseccomp2 + python3）----
 FROM debian:bookworm-slim AS runtime
+
+# cr-049: 安装 Node.js 24(nodesource,替代 bookworm 默认 node 18)
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# 系统依赖(libseccomp2 + python3 + curl + grep/sed/findutils;nodejs 已在上一层)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libseccomp2 ca-certificates curl python3 python3-pip nodejs npm \
+      libseccomp2 ca-certificates curl python3 python3-pip \
       grep sed gawk findutils \
  && rm -rf /var/lib/apt/lists/*
-# cr-020: 预装基础 python 库(requests/httpx)+ cr-049: 数据科学栈(numpy/pandas/matplotlib/scikit-learn)
+
+# cr-020 + cr-049: 数据科学栈(numpy pandas matplotlib scikit-learn)+基础库(requests httpx)
 # 安装到 /usr/lib/python3/dist-packages(landlock 白名单内,不用改 landlock)
 RUN python3 -m pip install --break-system-packages --target /usr/lib/python3/dist-packages --no-cache-dir \
     numpy pandas matplotlib scikit-learn requests httpx
