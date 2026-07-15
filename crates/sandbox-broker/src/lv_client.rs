@@ -228,11 +228,12 @@ impl SandboxHttp for LvClient {
             .send()
             .await?;
         let v: serde_json::Value = self.err_for(resp).await?.json().await?;
+        // lv-sandbox find 返回 {files:[{path, entry:{...}}], truncated} —— 取 path 字段。
         Ok(v["files"]
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
+                    .filter_map(|x| x.get("path").and_then(|p| p.as_str()).map(String::from))
                     .collect()
             })
             .unwrap_or_default())
@@ -254,13 +255,23 @@ impl SandboxHttp for LvClient {
             .send()
             .await?;
         let v: serde_json::Value = self.err_for(resp).await?.json().await?;
+        // lv-sandbox search 返回 {results:[{path, matches:[{line, text}]}], truncated}
+        // —— 展平成 grep -rn 风格 "path:line:text"(对齐 fixus stub fixus_grep 契约)。
         Ok(v["results"]
             .as_array()
             .map(|a| {
                 a.iter()
-                    .map(|x| match x {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
+                    .filter_map(|file| {
+                        let path = file.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        let matches = file.get("matches").and_then(|m| m.as_array())?;
+                        Some((path, matches))
+                    })
+                    .flat_map(|(path, matches)| {
+                        matches.iter().filter_map(move |m| {
+                            let line = m.get("line").and_then(|x| x.as_u64()).unwrap_or(0);
+                            let text = m.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                            Some(format!("{path}:{line}:{text}"))
+                        })
                     })
                     .collect()
             })
