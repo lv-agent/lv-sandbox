@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from ._handle import translating, translating_async
-from .exceptions import TimeoutException
+from .exceptions import SandboxNotRunningError, TimeoutException
 from .models import Process
 
 
@@ -80,6 +80,11 @@ class Commands:
                     p.stderr = err
                     if on_exit:
                         on_exit(p)
+        # 流式 exec 对不存在的 session 返 200+空流(server 行为);无 result 即失败。
+        if p.exit_code is None:
+            raise SandboxNotRunningError(
+                f"no result from command (session may not be running): {cmd}"
+            )
         return p
 
     # ----- server-gated(cr-083 S7:无 server 支撑,显式 defer) -----
@@ -156,6 +161,10 @@ class AsyncCommands:
                     p.stderr = err
                     if on_exit:
                         on_exit(p)
+        if p.exit_code is None:
+            raise SandboxNotRunningError(
+                f"no result from command (session may not be running): {cmd}"
+            )
         return p
 
     # ----- server-gated(cr-083 S7:async 同 defer) -----

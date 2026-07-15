@@ -190,8 +190,10 @@ class Session:
         timeout: Optional[str] = None,
         env: Optional[dict] = None,
         stdin: Optional[str] = None,
+        cwd: Optional[str] = None,
     ) -> Iterator[StreamEvent]:
         """Stream a session exec over SSE."""
+        # cr-083 P1a: cwd(相对 workspace)。
         body: dict = {"argv": list(argv)}
         if timeout is not None:
             body["timeout"] = timeout
@@ -199,6 +201,8 @@ class Session:
             body["custom_env"] = dict(env)
         if stdin is not None:
             body["stdin"] = stdin
+        if cwd is not None:
+            body["cwd"] = cwd
         with self._c._http.stream(
             "POST",
             f"/api/v1/sessions/{self.id}/exec?stream=true",

@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from lvsandbox_e2b import Sandbox
-from lvsandbox_e2b.exceptions import TimeoutException
+from lvsandbox_e2b.exceptions import SandboxNotRunningError, TimeoutException
 
 
 def _sb(handler):
@@ -100,3 +100,33 @@ def test_run_on_exit_fires_with_process():
     sb = _sb(handler)
     sb.commands.run("true", on_exit=lambda p: exited.append(p.exit_code))
     assert exited == [0]
+
+
+def test_run_passes_cwd_to_exec_stream():
+    # 回归:integration 暴露 exec_stream 缺 cwd(Commands.run 走流式路径)
+    seen = {}
+
+    def handler(req: httpx.Request):
+        if req.method == "POST":
+            seen["body"] = json.loads(req.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_stream([("started", {"job_id": "x"}), ("result", _RESULT_OK)]),
+        )
+
+    sb = _sb(handler)
+    sb.commands.run("pwd", cwd="sub")
+    assert seen["body"]["cwd"] == "sub"
+
+
+def test_run_no_result_raises_not_running():
+    # 回归:server 对已 kill session 的流式 exec 返 200+空流;无 result 即失败。
+    def handler(req: httpx.Request):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=b""
+        )
+
+    sb = _sb(handler)
+    with pytest.raises(SandboxNotRunningError):
+        sb.commands.run("ls")
