@@ -149,6 +149,22 @@ class Sandbox:
                 out.append(Sandbox(sandbox_id=s.id, _client=self._c))
         return out
 
+    def keep_alive(self, minutes: int) -> None:
+        """Reset session activity to push back the reaper deadline.
+
+        ⚠️ lv-sandbox 用全局 TTL reaper(cr-040)按 last_activity 回收,非 E2B 的
+        per-session timeout 延长。本方法通过 PATCH 重置 last_activity(PATCH 副作用)
+        达成实际 keep-alive;minutes 记入 timeout_secs(parity,reaper 不读它)。
+        """
+        with translating("session"):
+            self._c.sessions.get(self.sandbox_id).set_timeout(int(minutes) * 60)
+
+    def get_metrics(self):
+        raise NotImplementedError(
+            "get_metrics needs a per-sandbox resource endpoint "
+            "(server only exposes global Prometheus /metrics; cr-085 §5.4 not done)"
+        )
+
     # ----- sub-accessors (lazy import to avoid cycles) -----
 
     @property
@@ -285,6 +301,18 @@ class AsyncSandbox:
         async with translating_async("session"):
             s = await self._c.sessions.get(self.sandbox_id)
             await s.set_metadata(metadata)
+
+    async def keep_alive(self, minutes: int) -> None:
+        """⚠️ activity-touch(见 :meth:`Sandbox.keep_alive` 的语义说明)。"""
+        async with translating_async("session"):
+            s = await self._c.sessions.get(self.sandbox_id)
+            await s.set_timeout(int(minutes) * 60)
+
+    async def get_metrics(self):
+        raise NotImplementedError(
+            "get_metrics needs a per-sandbox resource endpoint "
+            "(server only exposes global Prometheus /metrics; cr-085 §5.4 not done)"
+        )
 
     @property
     def commands(self):

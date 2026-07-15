@@ -82,6 +82,23 @@ class Commands:
                         on_exit(p)
         return p
 
+    # ----- server-gated(cr-083 S7:无 server 支撑,显式 defer) -----
+
+    def send_stdin(self, pid, data) -> None:
+        raise NotImplementedError(
+            "commands.send_stdin needs interactive exec stdin (cr-085 M9, deferred)"
+        )
+
+    def list(self) -> list:
+        raise NotImplementedError(
+            "commands.list needs a process-list endpoint (no server support)"
+        )
+
+    def kill(self, pid, signal: int = 9) -> None:
+        raise NotImplementedError(
+            "commands.kill needs a process-kill endpoint (no server support)"
+        )
+
 
 class AsyncCommands:
     """Async counterpart of :class:`Commands` (cr-083 §6.2 AsyncSandbox)。"""
@@ -140,3 +157,20 @@ class AsyncCommands:
                     if on_exit:
                         on_exit(p)
         return p
+
+    # ----- server-gated(cr-083 S7:async 同 defer) -----
+
+    async def send_stdin(self, pid, data) -> None:
+        raise NotImplementedError(
+            "commands.send_stdin needs interactive exec stdin (cr-085 M9, deferred)"
+        )
+
+    async def list(self) -> list:
+        raise NotImplementedError(
+            "commands.list needs a process-list endpoint (no server support)"
+        )
+
+    async def kill(self, pid, signal: int = 9) -> None:
+        raise NotImplementedError(
+            "commands.kill needs a process-kill endpoint (no server support)"
+        )
