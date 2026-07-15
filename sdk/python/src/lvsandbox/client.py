@@ -176,6 +176,40 @@ class Session:
             _raise_for_status(resp)
             yield from iter_sse(resp)
 
+    def set_timeout(self, timeout_secs: int) -> dict:
+        """cr-083: PATCH session timeout(seconds)."""
+        return self._c._patch(
+            f"/api/v1/sessions/{self.id}", json={"timeout_secs": timeout_secs}
+        )
+
+    def set_metadata(self, metadata: dict) -> dict:
+        """cr-083: PATCH session metadata(full replace, server semantics)."""
+        return self._c._patch(
+            f"/api/v1/sessions/{self.id}", json={"metadata": dict(metadata)}
+        )
+
+    def set_alias(self, alias: str) -> dict:
+        """cr-083: PATCH session alias."""
+        return self._c._patch(f"/api/v1/sessions/{self.id}", json={"alias": alias})
+
+    def watch(self, path: str = "", *, timeout_secs: int = 60):
+        """cr-083 P1b: watch a workspace subtree via SSE.
+
+        Yields dicts ``{"event": "created"|"modified"|"removed", "paths": [...]}``.
+        notify Access/Any/Other kinds are dropped server-side(降噪)。
+        """
+        url = f"/api/v1/sessions/{self.id}/files/watch"
+        params: dict = {"timeout_secs": timeout_secs}
+        if path:
+            params["path"] = path
+        with self._c._http.stream(
+            "GET", url, params=params, timeout=self._c._timeout
+        ) as resp:
+            _raise_for_status(resp)
+            for ev in iter_sse(resp):
+                paths = ev.data.get("paths") if isinstance(ev.data, dict) else []
+                yield {"event": ev.type, "paths": paths or []}
+
     def snapshot(self) -> str:
         return self._c._post(f"/api/v1/sessions/{self.id}/snapshot")["snapshot_id"]
 
