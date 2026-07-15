@@ -5,6 +5,7 @@
 
 mod error;
 mod lv_client;
+mod session_map;
 
 use clap::Parser;
 
