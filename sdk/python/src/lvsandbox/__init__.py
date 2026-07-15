@@ -13,24 +13,48 @@ A thin client for the lv-sandbox HTTP API: one-shot jobs, persistent sessions
     print(s.exec(["/bin/sh", "run.sh"]).stdout)
 """
 
-from .client import Client, Jobs, Session, Sessions, Volumes
+from .client import (
+    AsyncClient,
+    AsyncSession,
+    AsyncSessions,
+    Client,
+    Jobs,
+    Session,
+    Sessions,
+    Volumes,
+)
 from .errors import LvApiError, LvError
-from .models import ExecResult, FileEntry, JobResult, SessionInfo, StreamEvent
+from .models import (
+    ExecResult,
+    FileEntry,
+    FoundFile,
+    JobResult,
+    SearchHit,
+    SearchMatch,
+    SessionInfo,
+    StreamEvent,
+)
 from .tools import openai_tool_schema
 
 __all__ = [
     "Client",
+    "AsyncClient",
     "Jobs",
     "Session",
+    "AsyncSession",
     "Sessions",
+    "AsyncSessions",
     "Volumes",
     "JobResult",
     "ExecResult",
     "StreamEvent",
     "SessionInfo",
     "FileEntry",
+    "FoundFile",
+    "SearchHit",
+    "SearchMatch",
     "LvError",
     "LvApiError",
     "openai_tool_schema",
 ]
-__version__ = "0.3.0"
+__version__ = "0.6.0"

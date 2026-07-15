@@ -12,7 +12,7 @@ import httpx
 
 from .errors import LvApiError
 from .models import FileEntry, FoundFile, JobResult, SearchHit, SessionInfo, StreamEvent
-from .sse import iter_sse
+from .sse import iter_sse, iter_sse_async
 
 
 def _raise_for_status(resp: httpx.Response) -> None:
@@ -403,3 +403,280 @@ class Client:
 
     def __exit__(self, *args) -> None:
         self.close()
+
+
+# ---------------------------------------------------------------------------
+# cr-083 P2: Async client subset(sessions/exec/files/snapshot;no jobs/volumes)
+# ---------------------------------------------------------------------------
+
+
+class _AsyncBase:
+    def __init__(self, client: "AsyncClient"):
+        self._c = client
+
+
+class AsyncSessionFiles(_AsyncBase):
+    def __init__(self, client: "AsyncClient", sid: str):
+        super().__init__(client)
+        self._sid = sid
+
+    async def get(self, path: str) -> bytes:
+        resp = await self._c._http.get(f"/api/v1/sessions/{self._sid}/files/{path}")
+        _raise_for_status(resp)
+        return resp.content
+
+    async def put(self, path: str, data: bytes) -> dict:
+        return await self._c._put(
+            f"/api/v1/sessions/{self._sid}/files/{path}", content=data
+        )
+
+    async def list(self, path: str = "") -> list:
+        r = await self._c._get(
+            f"/api/v1/sessions/{self._sid}/files",
+            params={"path": path} if path else {},
+        )
+        return [FileEntry.from_json(e) for e in r.get("entries", [])]
+
+    async def delete(self, path: str) -> dict:
+        return await self._c._delete(f"/api/v1/sessions/{self._sid}/files/{path}")
+
+    async def make_dir(self, path: str) -> dict:
+        return await self._c._post(
+            f"/api/v1/sessions/{self._sid}/mkdir", json={"path": path}
+        )
+
+    async def exists(self, path: str) -> bool:
+        resp = await self._c._http.head(f"/api/v1/sessions/{self._sid}/files/{path}")
+        if resp.status_code == 404:
+            return False
+        _raise_for_status(resp)
+        return resp.status_code < 400
+
+    async def find(self, pattern: str, *, path: str = "", limit: Optional[int] = None):
+        body: dict = {"pattern": pattern}
+        if path:
+            body["path"] = path
+        if limit is not None:
+            body["limit"] = limit
+        r = await self._c._post(f"/api/v1/sessions/{self._sid}/files/find", json=body)
+        return [FoundFile.from_json(f) for f in r.get("files", [])]
+
+    async def search(self, pattern: str, *, path: str = ""):
+        body = {"pattern": pattern}
+        if path:
+            body["path"] = path
+        r = await self._c._post(
+            f"/api/v1/sessions/{self._sid}/files/search", json=body
+        )
+        return [SearchHit.from_json(h) for h in r.get("results", [])]
+
+
+class AsyncSession:
+    def __init__(self, client: "AsyncClient", session_id: str):
+        self._c = client
+        self.id = session_id
+        self.files = AsyncSessionFiles(client, session_id)
+
+    async def info(self) -> SessionInfo:
+        return SessionInfo.from_json(await self._c._get(f"/api/v1/sessions/{self.id}"))
+
+    async def exec(
+        self,
+        argv,
+        *,
+        timeout: Optional[str] = None,
+        env: Optional[dict] = None,
+        stdin: Optional[str] = None,
+        cwd: Optional[str] = None,
+    ) -> JobResult:
+        body: dict = {"argv": list(argv)}
+        if timeout is not None:
+            body["timeout"] = timeout
+        if env:
+            body["custom_env"] = dict(env)
+        if stdin is not None:
+            body["stdin"] = stdin
+        if cwd is not None:
+            body["cwd"] = cwd
+        return JobResult.from_json(
+            await self._c._post(f"/api/v1/sessions/{self.id}/exec", json=body)
+        )
+
+    async def exec_stream(
+        self,
+        argv,
+        *,
+        timeout: Optional[str] = None,
+        env: Optional[dict] = None,
+        stdin: Optional[str] = None,
+        cwd: Optional[str] = None,
+    ):
+        """cr-083 P2: stream a session exec over SSE (yields StreamEvent)."""
+        body: dict = {"argv": list(argv)}
+        if timeout is not None:
+            body["timeout"] = timeout
+        if env:
+            body["custom_env"] = dict(env)
+        if stdin is not None:
+            body["stdin"] = stdin
+        if cwd is not None:
+            body["cwd"] = cwd
+        async with self._c._http.stream(
+            "POST",
+            f"/api/v1/sessions/{self.id}/exec?stream=true",
+            json=body,
+            timeout=self._c._timeout,
+        ) as resp:
+            _raise_for_status(resp)
+            async for ev in iter_sse_async(resp):
+                yield ev
+
+    async def set_timeout(self, timeout_secs: int) -> dict:
+        return await self._c._patch(
+            f"/api/v1/sessions/{self.id}", json={"timeout_secs": timeout_secs}
+        )
+
+    async def set_metadata(self, metadata: dict) -> dict:
+        return await self._c._patch(
+            f"/api/v1/sessions/{self.id}", json={"metadata": dict(metadata)}
+        )
+
+    async def set_alias(self, alias: str) -> dict:
+        return await self._c._patch(f"/api/v1/sessions/{self.id}", json={"alias": alias})
+
+    async def watch(self, path: str = "", *, timeout_secs: int = 60):
+        """cr-083 P2: watch via SSE. Async iterator yielding {event, paths}."""
+        url = f"/api/v1/sessions/{self.id}/files/watch"
+        params: dict = {"timeout_secs": timeout_secs}
+        if path:
+            params["path"] = path
+        async with self._c._http.stream(
+            "GET", url, params=params, timeout=self._c._timeout
+        ) as resp:
+            _raise_for_status(resp)
+            async for ev in iter_sse_async(resp):
+                paths = ev.data.get("paths") if isinstance(ev.data, dict) else []
+                yield {"event": ev.type, "paths": paths or []}
+
+    async def snapshot(self) -> str:
+        return (await self._c._post(f"/api/v1/sessions/{self.id}/snapshot"))[
+            "snapshot_id"
+        ]
+
+    async def destroy(self) -> dict:
+        return await self._c._delete(f"/api/v1/sessions/{self.id}")
+
+
+class AsyncSessions(_AsyncBase):
+    async def create(
+        self,
+        *,
+        profile: str = "shell",
+        env: Optional[dict] = None,
+        timeout_secs: Optional[int] = None,
+        alias: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        from_snapshot: Optional[str] = None,
+        volumes: Optional[list[dict]] = None,
+    ) -> AsyncSession:
+        body: dict = {"profile_name": profile}
+        if env:
+            body["env"] = dict(env)
+        if timeout_secs is not None:
+            body["timeout_secs"] = timeout_secs
+        if alias is not None:
+            body["alias"] = alias
+        if metadata:
+            body["metadata"] = dict(metadata)
+        if from_snapshot:
+            body["from_snapshot"] = from_snapshot
+        if volumes:
+            body["volumes"] = volumes
+        r = await self._c._post("/api/v1/sessions", json=body)
+        return AsyncSession(self._c, r["session_id"])
+
+    async def list(self) -> list:
+        r = await self._c._get("/api/v1/sessions")
+        return [SessionInfo.from_json(s) for s in r.get("sessions", [])]
+
+    async def get(self, session_id: str) -> AsyncSession:
+        return AsyncSession(self._c, session_id)
+
+    async def destroy(self, session_id: str) -> dict:
+        return await self._c._delete(f"/api/v1/sessions/{session_id}")
+
+
+class AsyncClient:
+    """Async client for a lv-sandbox server (cr-083 P2;subset)。
+
+    镜像 ``Client`` 的 sessions/exec/files/snapshot 子集;不含 jobs/volumes。
+    供 ``lvsandbox_e2b.AsyncSandbox`` 使用。
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8080",
+        *,
+        api_key: Optional[str] = None,
+        timeout: float = 300.0,
+        transport: Any = None,
+    ):
+        headers = {"accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._timeout = timeout
+        kwargs: dict = {
+            "base_url": base_url.rstrip("/"),
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if transport is not None:
+            kwargs["transport"] = transport
+        self._http = httpx.AsyncClient(**kwargs)
+        self.sessions = AsyncSessions(self)
+
+    async def _get(self, path: str, **kw) -> dict:
+        resp = await self._http.get(path, **kw)
+        _raise_for_status(resp)
+        return resp.json()
+
+    async def _post(self, path: str, **kw) -> dict:
+        resp = await self._http.post(path, **kw)
+        _raise_for_status(resp)
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
+    async def _put(self, path: str, **kw) -> dict:
+        resp = await self._http.put(path, **kw)
+        _raise_for_status(resp)
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
+    async def _delete(self, path: str, **kw) -> dict:
+        resp = await self._http.delete(path, **kw)
+        _raise_for_status(resp)
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
+    async def _patch(self, path: str, **kw) -> dict:
+        resp = await self._http.patch(path, **kw)
+        _raise_for_status(resp)
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        await self.aclose()

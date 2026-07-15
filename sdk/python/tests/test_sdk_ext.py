@@ -172,3 +172,144 @@ def test_search_parses_results_with_matches():
     assert res[0].path == "code.py"
     assert res[0].matches[0].line == 2
     assert res[0].matches[0].text == "TODO: fix"
+
+
+# ----- P2: AsyncClient 子集(asyncio.run 包装,免 pytest-asyncio 依赖) -----
+
+
+def _async_client(handler):
+    from lvsandbox import AsyncClient
+
+    return AsyncClient("http://test", transport=httpx.MockTransport(handler))
+
+
+def test_async_create_exec_read():
+    async def run():
+        def handler(req: httpx.Request):
+            p = req.url.path
+            if p == "/api/v1/sessions":
+                return httpx.Response(201, json={"session_id": "s1"})
+            if p.endswith("/exec"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "job_id": "session:s1",
+                        "status": "Completed",
+                        "exit_code": 0,
+                        "stdout": "out",
+                        "stderr": "",
+                        "duration_ms": 1,
+                        "timed_out": False,
+                    },
+                )
+            if p.endswith("/files/f.txt"):
+                return httpx.Response(200, content=b"hello")
+            return httpx.Response(404, json={"error": "no"})
+
+        c = _async_client(handler)
+        s = await c.sessions.create(profile="python", timeout_secs=60)
+        assert s.id == "s1"
+        r = await s.exec(["echo hi"], cwd=".")
+        assert r.exit_code == 0 and r.stdout == "out"
+        data = await s.files.get("f.txt")
+        assert data == b"hello"
+        await c.aclose()
+
+    asyncio.run(run())
+
+
+def test_async_exec_stream_sse():
+    async def run():
+        body = (
+            b'event: started\ndata: {"job_id":"x"}\n\n'
+            b'event: stdout\ndata: {"data":"hi"}\n\n'
+            b'event: result\ndata: {"job_id":"x","status":"Completed","exit_code":0,'
+            b'"stdout":[],"stderr":[],"duration":{"secs":0,"nanos":1},"timed_out":false}\n\n'
+        )
+
+        def handler(req: httpx.Request):
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, content=body
+            )
+
+        c = _async_client(handler)
+        s = await c.sessions.get("s1")
+        types = []
+        async for ev in s.exec_stream(["echo hi"]):
+            types.append(ev.type)
+        assert types == ["started", "stdout", "result"]
+        await c.aclose()
+
+    asyncio.run(run())
+
+
+def test_async_find_and_exists():
+    async def run():
+        def handler(req: httpx.Request):
+            if req.method == "POST":
+                return httpx.Response(
+                    200,
+                    json={
+                        "files": [
+                            {
+                                "path": "a.py",
+                                "entry": {"name": "a.py", "size": 1, "is_dir": False},
+                            }
+                        ],
+                        "truncated": False,
+                    },
+                )
+            return httpx.Response(200 if req.url.path.endswith("/yes") else 404)
+
+        c = _async_client(handler)
+        s = await c.sessions.get("s1")
+        found = await s.files.find("*.py")
+        assert found[0].path == "a.py"
+        assert await s.files.exists("yes") is True
+        assert await s.files.exists("no") is False
+        await c.aclose()
+
+    asyncio.run(run())
+
+
+def test_async_watch_sse():
+    async def run():
+        body = (
+            b'event: created\ndata: {"paths":["a.txt"]}\n\n'
+            b'event: removed\ndata: {"paths":["b.txt"]}\n\n'
+        )
+
+        def handler(req: httpx.Request):
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, content=body
+            )
+
+        c = _async_client(handler)
+        s = await c.sessions.get("s1")
+        out = []
+        async for ev in s.watch(timeout_secs=5):
+            out.append(ev)
+        assert out == [
+            {"event": "created", "paths": ["a.txt"]},
+            {"event": "removed", "paths": ["b.txt"]},
+        ]
+        await c.aclose()
+
+    asyncio.run(run())
+
+
+def test_async_set_timeout_patch():
+    async def run():
+        seen = {}
+
+        def handler(req: httpx.Request):
+            seen.update(method=req.method, body=json.loads(req.content))
+            return httpx.Response(200, json={"ok": True})
+
+        c = _async_client(handler)
+        s = await c.sessions.get("s1")
+        await s.set_timeout(90)
+        assert seen["method"] == "PATCH" and seen["body"] == {"timeout_secs": 90}
+        await c.aclose()
+
+    asyncio.run(run())
