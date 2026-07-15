@@ -1,7 +1,5 @@
 //! sandbox-broker — fixus broker bridge(cr-087)。
-//!
-//! 以 broker GroupConsumer 身份消费 fixus `tool-invoke-{region}`,翻成 lv-sandbox
-//! HTTP(session exec + 文件 API),再产 `tool-result-{region}`。fixus 零改动。
+//! 消费 tool-invoke-{region} → translate → lv-sandbox HTTP → 产 tool-result-{region}。
 
 mod error;
 mod idem;
@@ -9,7 +7,20 @@ mod lv_client;
 mod session_map;
 mod translate;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use clap::Parser;
+use tokio::sync::Semaphore;
+use tokio_stream::StreamExt;
+
+use logdb_client::broker::{BrokerProducer, GroupConsumer};
+use logdb_broker_proto::pb::consume_response::Payload;
+
+use idem::IdempotentCache;
+use lv_client::LvClient;
+use session_map::SessionMap;
 
 #[derive(Parser)]
 #[command(name = "sandbox-broker", version)]
@@ -22,19 +33,14 @@ struct Cli {
     region: String,
     #[arg(long, default_value = "sandboxes")]
     group: String,
-    /// lv-sandbox server HTTP base
     #[arg(long, default_value = "http://127.0.0.1:8080")]
     sandbox_url: String,
-    /// 可选 Bearer api_key(server 侧 cr-023)
     #[arg(long)]
     sandbox_api_key: Option<String>,
-    /// session 绑定 profile
     #[arg(long, default_value = "shell")]
     profile: String,
-    /// session 生命周期 + TTL 回收阈值(秒)
     #[arg(long, default_value = "3600")]
     session_timeout_secs: u64,
-    /// 客户端背压 semaphore
     #[arg(long, default_value = "4")]
     concurrency: usize,
 }
@@ -48,8 +54,160 @@ async fn main() {
         )
         .init();
     let cli = Cli::parse();
-    tracing::info!(
-        "sandbox-broker stub starting: broker={} region={} group={} sandbox={} profile={}",
-        cli.broker_addr, cli.region, cli.group, cli.sandbox_url, cli.profile
-    );
+
+    let http: Arc<dyn lv_client::SandboxHttp> = LvClient::new(
+        cli.sandbox_url.clone(),
+        cli.sandbox_api_key.clone(),
+        Duration::from_secs(300),
+    ).arc();
+    let sessions = Arc::new(SessionMap::new(cli.profile.clone(), cli.session_timeout_secs));
+    let cache = Arc::new(IdempotentCache::new());
+
+    let stream = format!("tool-invoke-{}", cli.region);
+    let result_stream = format!("tool-result-{}", cli.region);
+    let consumer_id = format!("sandbox-broker-{}", uuid::Uuid::new_v4().simple());
+
+    tracing::info!("sandbox-broker starting: broker={} stream={} group={} consumer={} sandbox={}",
+        cli.broker_addr, stream, cli.group, consumer_id, cli.sandbox_url);
+
+    loop {
+        let result_producer = match BrokerProducer::connect(format!("http://{}", cli.broker_addr)).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("result producer connect failed: {}; retry in 1s", e);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        match run_consumer(&cli, &stream, &result_stream, &consumer_id, http.clone(), sessions.clone(), cache.clone(), result_producer).await {
+            Ok(()) => tracing::info!("consumer loop ended normally"),
+            Err(e) => {
+                tracing::error!("consumer error: {}; retry in 1s", e);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_consumer(
+    cli: &Cli,
+    stream: &str,
+    result_stream: &str,
+    consumer_id: &str,
+    http: Arc<dyn lv_client::SandboxHttp>,
+    sessions: Arc<SessionMap>,
+    cache: Arc<IdempotentCache>,
+    result_producer: BrokerProducer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = format!("http://{}", cli.broker_addr);
+    let mut consumer = GroupConsumer::join(addr, &cli.namespace, stream, &cli.group, consumer_id).await?;
+    tracing::info!("joined group {} ({}), shards: {:?}", cli.group, consumer_id, consumer.assigned_shards());
+    let mut frames = consumer.consume_frames().await?;
+
+    let semaphore = Arc::new(Semaphore::new(cli.concurrency.max(1)));
+    let producer = Arc::new(tokio::sync::Mutex::new(result_producer));
+    let (commit_tx, mut commit_rx) = tokio::sync::mpsc::unbounded_channel::<(u32, u64)>();
+
+    let mut consecutive_errors: u32 = 0;
+    while let Some(item) = frames.next().await {
+        while let Ok((shard_id, seq)) = commit_rx.try_recv() {
+            let _ = consumer.commit_shard(shard_id, seq).await;
+        }
+        let frame = match item {
+            Ok(f) => { consecutive_errors = 0; f }
+            Err(e) => {
+                consecutive_errors += 1;
+                tracing::error!("consume error (consecutive={}): {}", consecutive_errors, e);
+                if consecutive_errors >= 3 {
+                    return Err(format!("{} consecutive consume errors, rejoining", consecutive_errors).into());
+                }
+                continue;
+            }
+        };
+        match frame.payload {
+            Some(Payload::Record(rec)) => {
+                if rec.event_type != "tool_invoked" { continue; }
+                let payload: serde_json::Value = serde_json::from_slice(&rec.content).unwrap_or_default();
+                let tool_name = payload["tool_name"].as_str().unwrap_or("?").to_string();
+                let idempotency_key = payload["idempotency_key"].as_str().unwrap_or("?").to_string();
+                let step_id = rec.metadata.get("step_id").cloned().unwrap_or_default();
+                let task_id = rec.metadata.get("task_id").cloned().unwrap_or_default();
+                let shard_id = rec.shard_id;
+                let seq = rec.seq;
+
+                // 幂等命中:直接产缓存结果 + commit
+                if let Some(cached) = cache.get(&idempotency_key).await {
+                    tracing::info!("cache hit: {}", idempotency_key);
+                    produce_result(&producer, &cli.namespace, result_stream, &step_id, &task_id, &tool_name, &cached).await;
+                    let _ = consumer.commit_shard(shard_id, seq).await;
+                    continue;
+                }
+
+                let input = payload.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                let timeout_ms = payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(120_000);
+                let timeout_secs = (timeout_ms / 1000).clamp(1, 600);
+                let session_id_src = payload["session_id"].as_str().unwrap_or(&task_id).to_string();
+
+                let sem = semaphore.clone();
+                let prod = producer.clone();
+                let tx = commit_tx.clone();
+                let ns = cli.namespace.clone();
+                let rs = result_stream.to_string();
+                let cache_clone = cache.clone();
+                let http_clone = http.clone();
+                let sessions_clone = sessions.clone();
+
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed");
+                    let t0 = std::time::Instant::now();
+                    let (success, output, error) = match translate::execute(
+                        &tool_name, &input, timeout_secs, &session_id_src, &http_clone, &sessions_clone,
+                    ).await {
+                        Ok(o) => (o.success, o.output, o.error),
+                        Err(e) => (false, serde_json::Value::Null, Some(format!("{}", e))),
+                    };
+                    let dur = t0.elapsed().as_millis() as u64;
+                    let r = idem::ToolResult { success, output, error, duration_ms: dur };
+                    tracing::info!("executed {} task={} success={} duration_ms={}", tool_name, task_id, r.success, dur);
+                    cache_clone.put(idempotency_key.clone(), r.clone()).await;
+                    produce_result(&prod, &ns, &rs, &step_id, &task_id, &tool_name, &r).await;
+                    let _ = tx.send((shard_id, seq));
+                });
+            }
+            Some(Payload::CaughtUp(_)) | Some(Payload::Rebalance(_)) | Some(Payload::Assignment(_)) => {}
+            None => {}
+        }
+    }
+    drop(commit_tx);
+    while let Some((shard_id, seq)) = commit_rx.recv().await {
+        let _ = consumer.commit_shard(shard_id, seq).await;
+    }
+    tracing::info!("all tasks done, leaving group");
+    consumer.leave().await?;
+    Ok(())
+}
+
+async fn produce_result(
+    producer: &Arc<tokio::sync::Mutex<BrokerProducer>>,
+    namespace: &str,
+    result_stream: &str,
+    step_id: &str,
+    task_id: &str,
+    tool_name: &str,
+    r: &idem::ToolResult,
+) {
+    let result_payload = serde_json::json!({
+        "step_id": step_id, "task_id": task_id, "tool_name": tool_name,
+        "success": r.success, "output": r.output, "error": r.error, "duration_ms": r.duration_ms,
+    });
+    let content = serde_json::to_vec(&result_payload).unwrap_or_default();
+    let mut meta = HashMap::new();
+    meta.insert("step_id".into(), step_id.to_string());
+    meta.insert("task_id".into(), task_id.to_string());
+    meta.insert("event_type".into(), "tool_result".into());
+    let mut p = producer.lock().await;
+    if let Err(e) = p.produce_full(namespace, result_stream, "tool_result", &content, Some(step_id), 0, "application/json", &meta).await {
+        tracing::error!("broker produce result failed: {}", e);
+    }
 }
