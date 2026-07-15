@@ -34,7 +34,7 @@ fn make_request(job_id: &str, argv: &[&str]) -> JobRequest {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    }
+        cwd: None,    }
 }
 
 /// 读取当前进程 VmRSS（KB）

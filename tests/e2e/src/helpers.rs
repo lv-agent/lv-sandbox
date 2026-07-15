@@ -174,7 +174,7 @@ pub fn make_job_request_with_profile(
         timeout: Some(timeout),
         custom_env: HashMap::new(),
         stdin_data: None,
-    }
+        cwd: None,    }
 }
 
 /// 发送 oneshot 请求并解析 JSON 响应

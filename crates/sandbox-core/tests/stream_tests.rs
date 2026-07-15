@@ -26,7 +26,7 @@ async fn streaming_sink_emits_started_stdout_result_in_order() {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    };
+        cwd: None,    };
     let result = runner
         .run_job_with_cancel(
             req,
@@ -79,7 +79,7 @@ async fn no_sink_runs_normally() {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    };
+        cwd: None,    };
     let result = runner
         .run_job_with_cancel(req, tokio_util::sync::CancellationToken::new(), None)
         .await

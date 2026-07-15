@@ -26,6 +26,12 @@ pub struct TtyQuery {
     /// 超时(秒),默认 300
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// cr-085 M8: 初始终端列数(默认 80)。
+    #[serde(default)]
+    pub cols: Option<u16>,
+    /// cr-085 M8: 初始终端行数(默认 24)。
+    #[serde(default)]
+    pub rows: Option<u16>,
 }
 
 /// WebSocket upgrade handler。
@@ -57,16 +63,22 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
     };
     let _lock = exec_lock.lock().await;
 
-    // 2. openpty
+    // 2. openpty(cr-085 M8: 传初始 winsize from query cols/rows,默认 80x24)
     let (master_fd, slave_fd) = {
         let mut m: libc::c_int = -1;
         let mut s: libc::c_int = -1;
+        let ws = libc::winsize {
+            ws_row: q.rows.unwrap_or(24),
+            ws_col: q.cols.unwrap_or(80),
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
         let rc = unsafe {
             libc::openpty(
                 &mut m, &mut s,
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                std::ptr::null(),
+                &ws,
             )
         };
         if rc != 0 {
@@ -165,15 +177,20 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
             Some(data) = rx.recv() => {
                 if socket.send(Message::binary(data)).await.is_err() { break; }
             }
-            // WS → master(客户端输入)
+            // WS → master(客户端输入)。cr-085 M8: Text 先试解析 resize 控制消息;
+            // 命中 → ioctl TIOCSWINSZ;否则当 stdin 写入(向后兼容旧客户端)。
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
                         let _ = unsafe { libc::write(master_fd, data.as_ptr().cast(), data.len()) };
                     }
                     Some(Ok(Message::Text(s))) => {
-                        let b = s.as_bytes().to_vec();
-                        let _ = unsafe { libc::write(master_fd, b.as_ptr().cast(), b.len()) };
+                        if let Some((cols, rows)) = try_parse_resize(&s) {
+                            let _ = apply_resize(master_fd, cols, rows);
+                        } else {
+                            let b = s.as_bytes().to_vec();
+                            let _ = unsafe { libc::write(master_fd, b.as_ptr().cast(), b.len()) };
+                        }
                     }
                     _ => break, // WS 关闭/错误
                 }
@@ -212,4 +229,97 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
     // 9. 清理
     if let Some(cg) = cgroup { let _ = cg.destroy(); }
     unsafe { libc::close(master_fd); }
+}
+
+/// cr-085 M8: 解析 resize 控制消息。仅当 Text 是 JSON `{type:"resize",cols,rows}` 且
+/// cols/rows 非零时返回 Some;否则 None(调用方当 stdin 处理,向后兼容旧客户端)。
+fn try_parse_resize(s: &str) -> Option<(u16, u16)> {
+    #[derive(serde::Deserialize)]
+    struct ResizeMsg {
+        #[serde(rename = "type")]
+        kind: String,
+        cols: u16,
+        rows: u16,
+    }
+    let msg: ResizeMsg = serde_json::from_str(s).ok()?;
+    if msg.kind != "resize" || msg.cols == 0 || msg.rows == 0 {
+        return None;
+    }
+    Some((msg.cols, msg.rows))
+}
+
+/// cr-085 M8: 对 PTY master 施加 winsize(TIOCSWINSZ),内核向 slave 前台进程组发 SIGWINCH。
+fn apply_resize(master_fd: libc::c_int, cols: u16, rows: u16) -> std::io::Result<()> {
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: master_fd 是已打开的 PTY master;TIOCSWINSZ 第 3 参为 winsize 只读结构。
+    let rc = unsafe { libc::ioctl(master_fd, libc::TIOCSWINSZ, &ws) };
+    if rc < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// cr-085 M8: apply_resize 经 TIOCSWINSZ 写入 master,slave 侧 TIOCGWINSZ 读回一致。
+    #[test]
+    fn apply_resize_sets_winsize_on_pty() {
+        let (master, slave) = {
+            let mut m: libc::c_int = -1;
+            let mut s: libc::c_int = -1;
+            let rc = unsafe {
+                libc::openpty(
+                    &mut m,
+                    &mut s,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(rc, 0, "openpty");
+            (m, s)
+        };
+        apply_resize(master, 100, 30).expect("resize should succeed");
+
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::ioctl(slave, libc::TIOCGWINSZ, &mut ws) };
+        assert_eq!(rc, 0, "TIOCGWINSZ");
+        assert_eq!(ws.ws_col, 100, "cols propagated to slave");
+        assert_eq!(ws.ws_row, 30, "rows propagated to slave");
+
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
+
+    /// cr-085 M8: try_parse_resize 仅识别合法 resize JSON;
+    /// 其余(非 JSON / type 不符 / 零尺寸)→ None(当 stdin 处理,向后兼容)。
+    #[test]
+    fn try_parse_resize_only_matches_resize_json() {
+        assert_eq!(
+            try_parse_resize(r#"{"type":"resize","cols":100,"rows":30}"#),
+            Some((100, 30))
+        );
+        // 非 JSON(普通 stdin 文本)→ None
+        assert_eq!(try_parse_resize("hello stdin"), None);
+        // JSON 但 type 非 resize → None
+        assert_eq!(
+            try_parse_resize(r#"{"type":"stdin","cols":1,"rows":1}"#),
+            None
+        );
+        // 零尺寸 → None(无效)
+        assert_eq!(
+            try_parse_resize(r#"{"type":"resize","cols":0,"rows":30}"#),
+            None
+        );
+    }
 }

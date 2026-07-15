@@ -27,7 +27,7 @@ fn make_request(job_id: &str, argv: &[&str]) -> JobRequest {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    }
+        cwd: None,    }
 }
 
 // ==================== 第 1 轮：正常执行 + 退出码 + stdout ====================

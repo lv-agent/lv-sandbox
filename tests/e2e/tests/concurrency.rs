@@ -53,7 +53,7 @@ async fn queueing_jobs_beyond_max_wait_not_rejected() {
                 timeout: Some(std::time::Duration::from_secs(5)),
                 custom_env: Default::default(),
                 stdin_data: None,
-            };
+                cwd: None,            };
             async move { sched.clone().submit(req).await }
         })
         .collect();
@@ -89,7 +89,7 @@ async fn actual_concurrency_does_not_exceed_max_concurrent() {
                 timeout: Some(std::time::Duration::from_secs(5)),
                 custom_env: Default::default(),
                 stdin_data: None,
-            };
+                cwd: None,            };
             async move { sched.clone().submit(req).await }
         })
         .collect();
@@ -147,7 +147,7 @@ async fn rapidly_submit_20_jobs_stress_test() {
                 timeout: Some(std::time::Duration::from_secs(10)),
                 custom_env: Default::default(),
                 stdin_data: None,
-            };
+                cwd: None,            };
             async move { sched.clone().submit(req).await }
         })
         .collect();

@@ -69,7 +69,7 @@ async fn stdin_passed_correctly() {
         timeout: Some(std::time::Duration::from_secs(5)),
         custom_env: Default::default(),
         stdin_data: Some(b"hello from stdin".to_vec()),
-    };
+        cwd: None,    };
     // 需要用 runner 直接调用（HTTP API 不支持 stdin）
     let result = runner.run_job(req).await.expect("execution failed");
 

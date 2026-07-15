@@ -59,7 +59,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/sessions", post(create_session).get(list_sessions))
         .route(
             "/api/v1/sessions/{id}",
-            get(get_session).delete(destroy_session),
+            get(get_session).delete(destroy_session).patch(patch_session),
         )
         .route("/api/v1/sessions/{id}/exec", post(exec_session))
         .route("/api/v1/sessions/{id}/tty", get(crate::tty::session_tty))
@@ -67,8 +67,15 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/sessions/{id}/files", get(list_files))
         .route(
             "/api/v1/sessions/{id}/files/{*path}",
-            get(get_file).put(put_file).delete(delete_file),
+            get(get_file).put(put_file).delete(delete_file).head(head_file),
         )
+        // cr-085 M5: mkdir + HEAD exists(E2B filesystem.make_dir/exists)
+        .route("/api/v1/sessions/{id}/mkdir", post(mkdir))
+        // cr-085 M6: find(glob)+ search(内容正则)
+        .route("/api/v1/sessions/{id}/files/find", post(find_files))
+        .route("/api/v1/sessions/{id}/files/search", post(search_files))
+        // cr-085 M7: watch(FS 事件 → SSE)
+        .route("/api/v1/sessions/{id}/files/watch", get(crate::watch::watch_files))
         // cr-027: 快照
         .route("/api/v1/snapshots", get(list_snapshots))
         .route("/api/v1/snapshots/{id}", delete(destroy_snapshot))
@@ -300,8 +307,8 @@ pub fn mime_for(name: &str) -> &'static str {
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: String,
+pub(crate) struct ErrorResponse {
+    pub(crate) error: String,
 }
 
 /// cr-024: POST /jobs?stream=true 的 query flag。
@@ -373,7 +380,7 @@ async fn create_job(
         timeout,
         custom_env: req.custom_env.unwrap_or_default(),
         stdin_data: req.stdin.map(|s| s.into_bytes()),
-    };
+        cwd: None,    };
 
     // cr-024: 流式模式 → text/event-stream(started → stdout… → result)
     if q.stream.unwrap_or(false) {
@@ -576,7 +583,7 @@ fn parse_duration(s: &str) -> Option<Duration> {
 // ==================== cr-026: 会话 + 文件 I/O ====================
 
 /// cr-026: CoreError → HTTP 状态(404 not found / 400 路径违规 / 500 其他)。
-fn core_err_response(e: &sandbox_core::error::CoreError) -> Response {
+pub(crate) fn core_err_response(e: &sandbox_core::error::CoreError) -> Response {
     use sandbox_core::error::CoreError;
     let (code, msg) = match e {
         CoreError::Io(ioe) if ioe.kind() == std::io::ErrorKind::NotFound => {
@@ -601,6 +608,15 @@ struct CreateSessionRequest {
     /// cr-028: 挂载持久卷。
     #[serde(default)]
     volumes: Option<Vec<VolumeMount>>,
+    /// cr-085 M3: E2B alias(Sandbox.connect 别名)。
+    #[serde(default)]
+    alias: Option<String>,
+    /// cr-085 M3: 自由 KV 元数据(E2B metadata)。
+    #[serde(default)]
+    metadata: Option<std::collections::HashMap<String, String>>,
+    /// cr-085 M3: 会话总生命周期超时(秒)。
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -612,11 +628,14 @@ async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Response {
-    match state.sessions.create_session(
+    match state.sessions.create_session_with_opts(
         &req.profile_name,
         req.env.unwrap_or_default(),
         req.from_snapshot,
         req.volumes.unwrap_or_default(),
+        req.alias,
+        req.metadata.unwrap_or_default(),
+        req.timeout_secs,
     ) {
         Ok(id) => (
             StatusCode::CREATED,
@@ -663,6 +682,33 @@ async fn destroy_session(
     }
 }
 
+/// cr-085 M4: PATCH /sessions/{id} —— 更新 alias/timeout/metadata(全量替换语义)。
+#[derive(Debug, Deserialize)]
+struct PatchSessionRequest {
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn patch_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<PatchSessionRequest>,
+) -> Response {
+    match state.sessions.update_session(
+        &id,
+        req.alias,
+        req.timeout_secs,
+        req.metadata.unwrap_or_default(),
+    ) {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ExecSessionRequest {
     argv: Vec<String>,
@@ -673,6 +719,9 @@ struct ExecSessionRequest {
     /// cr-034: exec 后附带工作区文件清单(MIME 检测)。默认关。
     #[serde(default)]
     list_files: Option<bool>,
+    /// cr-085 M3: 工作目录(相对 workspace,空=workspace 根)。
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 async fn exec_session(
@@ -704,6 +753,7 @@ async fn exec_session(
         timeout,
         custom_env: req.custom_env.unwrap_or_default(),
         stdin_data: req.stdin.map(|s| s.into_bytes()),
+        cwd: req.cwd.clone(),
     };
 
     // cr-026: 流式 → SSE(复用 cr-024 事件映射)
@@ -824,6 +874,96 @@ async fn delete_file(
 ) -> Response {
     match state.sessions.delete_file(&id, &path) {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+/// cr-085 M5: POST /sessions/{id}/mkdir —— 建目录(E2B filesystem.make_dir)。
+#[derive(Debug, Deserialize)]
+struct MkdirRequest {
+    path: String,
+}
+
+async fn mkdir(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<MkdirRequest>,
+) -> Response {
+    match state.sessions.make_dir(&id, &req.path) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+/// cr-085 M5: HEAD /sessions/{id}/files/{path} —— 存在性(文件/目录,200/404)。
+async fn head_file(
+    State(state): State<Arc<AppState>>,
+    Path((id, path)): Path<(String, String)>,
+) -> StatusCode {
+    if state.sessions.file_exists(&id, &path) {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+/// cr-085 M6: POST /sessions/{id}/files/find —— glob 匹配(globset + walkdir)。E2B filesystem.find。
+#[derive(Debug, Deserialize)]
+struct FindRequest {
+    #[serde(default)]
+    path: Option<String>,
+    pattern: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn find_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<FindRequest>,
+) -> Response {
+    const DEFAULT_LIMIT: usize = 1000;
+    const MAX_LIMIT: usize = 10000;
+    let limit = req.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+    match state.sessions.find_session_files(
+        &id,
+        req.path.as_deref().unwrap_or(""),
+        &req.pattern,
+        limit,
+    ) {
+        Ok(res) => Json(serde_json::json!({
+            "files": res.files,
+            "truncated": res.truncated,
+        }))
+        .into_response(),
+        Err(e) => core_err_response(&e),
+    }
+}
+
+/// cr-085 M6: POST /sessions/{id}/files/search —— 内容正则匹配(regex + walkdir)。E2B filesystem.search。
+#[derive(Debug, Deserialize)]
+struct SearchRequest {
+    #[serde(default)]
+    path: Option<String>,
+    pattern: String,
+}
+
+async fn search_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SearchRequest>,
+) -> Response {
+    match state.sessions.search_session_files(
+        &id,
+        req.path.as_deref().unwrap_or(""),
+        &req.pattern,
+        &crate::session::SearchOpts::default(),
+    ) {
+        Ok(res) => Json(serde_json::json!({
+            "results": res.results,
+            "truncated": res.truncated,
+        }))
+        .into_response(),
         Err(e) => core_err_response(&e),
     }
 }
@@ -1428,6 +1568,106 @@ mod tests {
         );
     }
 
+    /// cr-085 M6: POST /sessions/{id}/files/find → glob 匹配列表(含 path)。
+    #[tokio::test]
+    async fn find_endpoint_returns_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/a.py"))
+                    .body(Body::from(&b"x"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/b.txt"))
+                    .body(Body::from(&b"y"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{sid}/files/find"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pattern":"**/*.py"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let paths: Vec<String> = j["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(paths.contains(&"a.py".to_string()), "py matched: {paths:?}");
+        assert!(
+            !paths.iter().any(|p| p == "b.txt"),
+            "txt excluded: {paths:?}"
+        );
+        assert_eq!(j["truncated"], false);
+    }
+
+    /// cr-085 M6: POST .../files/search → 正则命中内容,带行号。
+    #[tokio::test]
+    async fn search_endpoint_returns_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/code.py"))
+                    .header("content-type", "application/octet-stream")
+                    .body(Body::from(&b"ok\nTODO: fix\nok\n"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/sessions/{sid}/files/search"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pattern":"TODO"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let results = j["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["path"], "code.py");
+        assert_eq!(results[0]["matches"][0]["line"], 2);
+        assert!(results[0]["matches"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("TODO"));
+    }
+
     /// cr-033: PTY WebSocket 端到端——连接 tty → 收到 echo 输出 + exit 控制消息。
     #[tokio::test]
     async fn tty_websocket_echoes_output() {
@@ -1506,6 +1746,485 @@ mod tests {
             }
         }
         assert!(got_error, "should receive error for missing session");
+    }
+
+    /// cr-085 M8: query cols/rows → openpty 初始 winsize;子进程 /bin/stty size 直接回读
+    /// (单 exec 无 fork,绕开 nproc 限制)。未生效则输出默认 "24 80"。
+    #[tokio::test]
+    async fn tty_query_cols_rows_set_initial_winsize() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // stty size → "rows cols"(即 "40 120")
+        let url = format!(
+            "ws://{addr}/api/v1/sessions/{sid}/tty?argv=/bin/stty+size&cols=120&rows=40"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WS connect");
+
+        let mut out = String::new();
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Binary(data))) => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                }
+                Some(Ok(Message::Text(s))) if s.contains("\"type\":\"exit\"") => break,
+                Some(Ok(Message::Close(_))) | None => break,
+                _ => {}
+            }
+        }
+        let t = out.trim();
+        assert!(
+            t.contains("40") && t.contains("120"),
+            "stty size should reflect query cols/rows (got default 24x80 if broken): {out:?}"
+        );
+    }
+
+    /// cr-085 M8: 非控制 Text 仍写 stdin(向后兼容);argv=/bin/head -n 1(读一行即退出,
+    /// 避免 cat 长驻导致 run_tty 被 abort 时 master_fd 未关 → 阻塞读线程挂起)。
+    #[tokio::test]
+    async fn tty_text_message_treated_as_stdin() {
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let url = format!(
+            "ws://{addr}/api/v1/sessions/{sid}/tty?argv=/bin/head+-n+1"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WS connect");
+
+        // 普通 Text(非 resize JSON)→ 写 stdin → head 回显后退出
+        ws.send(Message::text("tty-stdin-marker\n"))
+            .await
+            .unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(data) = msg {
+                    if String::from_utf8_lossy(&data).contains("tty-stdin-marker") {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(got, "plain text should reach stdin (head echoes it)");
+    }
+
+    /// cr-085 M8: resize 控制消息被拦截(不写 stdin,head 不回显其内容),后续普通 Text 仍正常。
+    /// 验证 handler 把 resize JSON 路由到 ioctl 而非 stdin。argv=/bin/head -n 1(读一行即退出)。
+    #[tokio::test]
+    async fn tty_resize_message_intercepted_not_echoed() {
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let url = format!(
+            "ws://{addr}/api/v1/sessions/{sid}/tty?argv=/bin/head+-n+1"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WS connect");
+
+        // 1. resize 控制消息(无换行)→ 应被拦截走 ioctl,不进 stdin
+        ws.send(Message::text(r#"{"type":"resize","cols":100,"rows":30}"#))
+            .await
+            .unwrap();
+        // 2. 普通 Text(带换行)→ head 读到此行 → 回显 → 退出
+        ws.send(Message::text("after-resize\n"))
+            .await
+            .unwrap();
+
+        let echoed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut acc = String::new();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(data) = msg {
+                    acc.push_str(&String::from_utf8_lossy(&data));
+                    if acc.contains("after-resize") {
+                        return acc;
+                    }
+                }
+            }
+            acc
+        })
+        .await
+        .unwrap_or_default();
+        assert!(
+            echoed.contains("after-resize"),
+            "plain text after resize must echo: {echoed:?}"
+        );
+        assert!(
+            !echoed.contains("\"type\":\"resize\""),
+            "resize JSON must NOT reach stdin: {echoed:?}"
+        );
+    }
+
+    // ==================== cr-085 M7: watch(notify → SSE) ====================
+
+    /// cr-085 M7: 写文件 → SSE `created` 事件(含 workspace 相对路径)。
+    /// 用裸 TCP 读 text/event-stream(避免 reqwest stream feature 依赖)。
+    #[tokio::test]
+    async fn watch_emits_created_on_write() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let app2 = app.clone();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app2).await;
+        });
+
+        // 起 SSE watch
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /api/v1/sessions/{sid}/files/watch?timeout_secs=5 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(s);
+        // 消费响应头(读到空行)
+        let mut line = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        // 给 watcher 注册留时间
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 写文件(经 oneshot → 同一 AppState workspace)
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/watched.txt"))
+                    .body(Body::from(&b"x"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 读 SSE 直到 created + watched.txt
+        let mut got = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            line.clear();
+            match tokio::time::timeout(deadline - now, reader.read_line(&mut line)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => {
+                    got.push_str(&line);
+                    if got.contains("created") && got.contains("watched.txt") {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(got.contains("created"), "created event missing: {got:?}");
+        assert!(
+            got.contains("watched.txt"),
+            "relative path missing: {got:?}"
+        );
+    }
+
+    /// cr-085 M7: 覆盖既有文件 → SSE `modified` 事件。
+    #[tokio::test]
+    async fn watch_emits_modified_on_overwrite() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        // 先写文件(watch 前)
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/m.txt"))
+                    .body(Body::from(&b"v1"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let app2 = app.clone();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app2).await;
+        });
+
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /api/v1/sessions/{sid}/files/watch?timeout_secs=5 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(s);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 覆盖
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/m.txt"))
+                    .body(Body::from(&b"v2"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut got = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            line.clear();
+            match tokio::time::timeout(deadline - now, reader.read_line(&mut line)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => {
+                    got.push_str(&line);
+                    if got.contains("modified") && got.contains("m.txt") {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(got.contains("modified"), "modified event missing: {got:?}");
+    }
+
+    /// cr-085 M7: 越界 path(含 ..)→ 400(不进 SSE)。
+    #[tokio::test]
+    async fn watch_rejects_out_of_workspace_path() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let app2 = app.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app2).await;
+        });
+
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // URL 编码 .. → axum 解码 → sanitize 拒 → 400
+        let req = format!(
+            "GET /api/v1/sessions/{sid}/files/watch?path=%2e%2e/etc&timeout_secs=5 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(s);
+        let mut status = String::new();
+        reader.read_line(&mut status).await.unwrap();
+        assert!(
+            status.contains("400"),
+            "out-of-workspace watch must be rejected: {status}"
+        );
+    }
+
+    /// cr-085 M7: timeout 到期 → 流结束 + watcher 释放。证明方式:超时后再写文件,
+    /// 不再收到 created 事件(watcher 已 Drop,observe 不到)。
+    #[tokio::test]
+    async fn watch_timeout_closes_stream() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let app2 = app.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app2).await;
+        });
+
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /api/v1/sessions/{sid}/files/watch?timeout_secs=1 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(s);
+        // 消费头
+        let mut line = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        // 等超时(1s)生效后再写文件
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/late.txt"))
+                    .body(Body::from(&b"x"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 再读 2s:不应出现 created(流已结束,watcher 已 Drop)
+        let mut got = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            line.clear();
+            match tokio::time::timeout(deadline - now, reader.read_line(&mut line)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => got.push_str(&line),
+                _ => {}
+            }
+        }
+        assert!(
+            !got.contains("created") || !got.contains("late.txt"),
+            "post-timeout event should not arrive (stream ended): {got:?}"
+        );
+    }
+
+    /// cr-085 M7: 客户端断开 → watcher 清理(ACTIVE_WATCHERS 回到基线)。
+    /// 验证 stream! 持有的 watcher + WatchGuard 在连接断开时 Drop(keep_alive 写失败触发检测)。
+    #[tokio::test]
+    async fn watch_disconnect_cleans_up() {
+        use std::sync::atomic::Ordering;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = make_app(tmp.path()).await;
+        let sid = create_test_session(app.clone()).await;
+        let app2 = app.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app2).await;
+        });
+
+        let before = crate::watch::ACTIVE_WATCHERS.load(Ordering::SeqCst);
+
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /api/v1/sessions/{sid}/files/watch?timeout_secs=30 HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(s);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/sessions/{sid}/files/trigger.txt"))
+                    .body(Body::from(&b"x"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 读到首个 created(证明 watcher 活跃)
+        let mut saw_event = false;
+        let d1 = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= d1 {
+                break;
+            }
+            line.clear();
+            match tokio::time::timeout(d1 - now, reader.read_line(&mut line)).await {
+                Ok(Ok(_)) if line.contains("created") => {
+                    saw_event = true;
+                    break;
+                }
+                Ok(Ok(0)) => break,
+                _ => {}
+            }
+        }
+        assert!(saw_event, "should receive at least one created event");
+        let during = crate::watch::ACTIVE_WATCHERS.load(Ordering::SeqCst);
+        assert!(during > before, "watcher active during connection");
+
+        // 断开(丢 reader/TcpStream)。检测延迟可变(hyper 读 FIN / keep_alive 写失败),
+        // 故轮询 ACTIVE_WATCHERS 回到基线;仅真正泄漏才超时失败。
+        drop(reader);
+        let mut cleaned = false;
+        for _ in 0..50 {
+            // 50 × 200ms = 10s 上限
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if crate::watch::ACTIVE_WATCHERS.load(Ordering::SeqCst) == before {
+                cleaned = true;
+                break;
+            }
+        }
+        assert!(
+            cleaned,
+            "watcher must be cleaned up after disconnect (leak)"
+        );
     }
 
     #[tokio::test]

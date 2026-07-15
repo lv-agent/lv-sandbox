@@ -491,7 +491,7 @@ mod tests {
             timeout: Some(Duration::from_secs(10)),
             custom_env: HashMap::new(),
             stdin_data: None,
-        }
+            cwd: None,        }
     }
 
     /// 轮询直到 job 进入终态或超时（测试辅助）
@@ -591,7 +591,7 @@ mod tests {
             timeout: Some(Duration::from_secs(30)),
             custom_env: HashMap::new(),
             stdin_data: None,
-        };
+            cwd: None,        };
         let jid = scheduler.submit_async(req).await;
         // 让代理起好 + 子进程跑起来
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -674,7 +674,7 @@ mod tests {
             timeout: Some(Duration::from_secs(10)),
             custom_env: HashMap::new(),
             stdin_data: None,
-        }
+            cwd: None,        }
     }
 
     /// cr-022 gap: scheduler 异步路径(submit_async → run_job_with_cancel)透出
@@ -847,7 +847,7 @@ mod tests {
             timeout: Some(Duration::from_secs(5)),
             custom_env: HashMap::new(),
             stdin_data: None,
-        };
+            cwd: None,        };
         scheduler.submit_async(req).await;
         wait_until_done(&scheduler, "sec-sched-001").await;
 

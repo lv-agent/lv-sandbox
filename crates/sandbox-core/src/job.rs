@@ -36,6 +36,9 @@ pub struct JobRequest {
     pub timeout: Option<Duration>,
     pub custom_env: HashMap<String, String>,
     pub stdin_data: Option<Vec<u8>>,
+    /// cr-085 M3: 工作目录(相对 workspace,空=workspace 根)。sanitize 圈定,拒 `..`/绝对。
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// 资源使用摘要

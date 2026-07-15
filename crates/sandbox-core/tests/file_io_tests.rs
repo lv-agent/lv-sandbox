@@ -183,7 +183,7 @@ async fn job_result_has_resource_usage_when_cgroup_available() {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    };
+        cwd: None,    };
     let result = runner
         .run_job(req)
         .await
@@ -223,7 +223,7 @@ async fn job_result_has_seccomp_denied_when_killed_by_sigsys() {
         timeout: Some(Duration::from_secs(5)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    };
+        cwd: None,    };
     let result = runner
         .run_job(req)
         .await
@@ -293,7 +293,7 @@ async fn job_result_has_oom_kill_when_cgroup_oom() {
         timeout: Some(Duration::from_secs(10)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    };
+        cwd: None,    };
     let result = runner
         .run_job(req)
         .await

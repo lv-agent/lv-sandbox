@@ -11,6 +11,7 @@ pub mod redact;
 pub mod scheduler;
 pub mod session;
 pub mod tty;
+pub mod watch;
 pub mod webhook;
 pub mod worker;
 

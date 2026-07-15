@@ -25,7 +25,7 @@ fn req(job_id: &str, argv: &[&str], profile: &str) -> JobRequest {
         timeout: Some(Duration::from_secs(10)),
         custom_env: HashMap::new(),
         stdin_data: None,
-    }
+        cwd: None,    }
 }
 
 /// 构造配额 profile。disk_quota_mb 是被测约束;

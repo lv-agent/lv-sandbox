@@ -149,7 +149,12 @@ impl SandboxRunner {
         // 提取 cgroup（父进程负责迁移 + 销毁，不进 pre_exec 闭包）
         let cgroup = prepared_ctx.take_cgroup();
 
-        let workspace_path = job_workspace.workspace.clone();
+        // cr-085 M3: cwd(相对 workspace,sanitize 圈定,拒 ..);无 cwd=workspace 根。
+        // 注:仅用于 chdir;landlock 根仍是 workspace.workspace(prepare 时编译),隔离不变。
+        let workspace_path = match request.cwd.as_deref().filter(|s| !s.is_empty()) {
+            Some(rel) => crate::workspace::sanitize_relpath(&job_workspace.workspace, rel)?,
+            None => job_workspace.workspace.clone(),
+        };
         let max_stdout = profile.max_stdout_bytes as usize;
         let max_stderr = profile.max_stderr_bytes as usize;
 
