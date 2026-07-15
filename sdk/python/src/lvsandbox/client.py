@@ -134,8 +134,10 @@ class Session:
         timeout: Optional[str] = None,
         env: Optional[dict] = None,
         stdin: Optional[str] = None,
+        cwd: Optional[str] = None,
     ) -> JobResult:
         """Run a command in this session's persistent workspace (synchronous)."""
+        # cr-083 P1a: cwd(相对 workspace)。env 字段为 custom_env(server 契约)。
         body: dict = {"argv": list(argv)}
         if timeout is not None:
             body["timeout"] = timeout
@@ -143,6 +145,8 @@ class Session:
             body["custom_env"] = dict(env)
         if stdin is not None:
             body["stdin"] = stdin
+        if cwd is not None:
+            body["cwd"] = cwd
         return JobResult.from_json(
             self._c._post(f"/api/v1/sessions/{self.id}/exec", json=body)
         )
@@ -185,12 +189,22 @@ class Sessions(_Base):
         *,
         profile: str = "shell",
         env: Optional[dict] = None,
+        timeout_secs: Optional[int] = None,
+        alias: Optional[str] = None,
+        metadata: Optional[dict] = None,
         from_snapshot: Optional[str] = None,
         volumes: Optional[list[dict]] = None,
     ) -> Session:
+        # cr-083 P1a: cr-085 create 高参(timeout_secs/alias/metadata)。注意:server 无 cwd。
         body: dict = {"profile_name": profile}
         if env:
             body["env"] = dict(env)
+        if timeout_secs is not None:
+            body["timeout_secs"] = timeout_secs
+        if alias is not None:
+            body["alias"] = alias
+        if metadata:
+            body["metadata"] = dict(metadata)
         if from_snapshot:
             body["from_snapshot"] = from_snapshot
         if volumes:
@@ -229,14 +243,21 @@ class Client:
         *,
         api_key: Optional[str] = None,
         timeout: float = 300.0,
+        transport: Any = None,
     ):
         headers = {"accept": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         self._timeout = timeout
-        self._http = httpx.Client(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=timeout
-        )
+        # cr-083 P1a: transport= 注入缝(MockTransport 单测);None 走默认 HTTP transport。
+        kwargs: dict = {
+            "base_url": base_url.rstrip("/"),
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if transport is not None:
+            kwargs["transport"] = transport
+        self._http = httpx.Client(**kwargs)
         self.jobs = Jobs(self)
         self.sessions = Sessions(self)
         self.volumes = Volumes(self)
@@ -270,6 +291,15 @@ class Client:
 
     def _delete(self, path: str, **kw) -> dict:
         resp = self._http.delete(path, **kw)
+        _raise_for_status(resp)
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
+    def _patch(self, path: str, **kw) -> dict:
+        # cr-083 P1b: PATCH helper(set_timeout/set_metadata/set_alias)。
+        resp = self._http.patch(path, **kw)
         _raise_for_status(resp)
         try:
             return resp.json()
