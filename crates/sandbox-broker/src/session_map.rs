@@ -36,7 +36,9 @@ impl SessionMap {
         Ok(sid)
     }
 
-    /// session 建失败/失效时清条目,下次重建。
+    /// session 建失败/失效时清条目,下次重建。v1 不主动调(靠 lv-sandbox TTL 回收);
+    /// 保留为 SessionMap 完整 API(get_or_create / invalidate 成对),供后续 exec 失败恢复用。
+    #[allow(dead_code)]
     pub async fn invalidate(&self, task_id: &str) {
         self.map.lock().await.remove(task_id);
     }

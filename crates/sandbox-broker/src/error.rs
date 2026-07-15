@@ -12,8 +12,6 @@ pub enum BridgeError {
     UnknownTool(String),
     #[error("missing field '{0}' in tool input")]
     MissingField(&'static str),
-    #[error("tool failed: {0}")]
-    Tool(String),
 }
 
 impl From<reqwest::Error> for BridgeError {

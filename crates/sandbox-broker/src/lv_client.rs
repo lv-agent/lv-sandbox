@@ -43,6 +43,8 @@ pub trait SandboxHttp: Send + Sync {
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<(), BridgeError>;
+    /// HEAD 文件存在性(映射 lv-sandbox HEAD /files/{path})。当前 8 工具未用;保留为完整 API 表面。
+    #[allow(dead_code)]
     async fn head_file(&self, session_id: &str, path: &str) -> Result<bool, BridgeError>;
     async fn find(
         &self,
@@ -56,13 +58,14 @@ pub trait SandboxHttp: Send + Sync {
         path: &str,
         pattern: &str,
     ) -> Result<Vec<String>, BridgeError>;
+    /// 销毁 session。v1 靠 lv-sandbox TTL 自动回收(cr-040)不主动调;保留给后续 task-done 信号用。
+    #[allow(dead_code)]
     async fn destroy_session(&self, session_id: &str) -> Result<(), BridgeError>;
 }
 
 /// reqwest 实现:对 lv-sandbox server 的 HTTP 调用。
 pub struct LvClient {
     base: String,
-    auth: Option<String>, // "Bearer <key>"
     http: reqwest::Client,
 }
 
@@ -82,7 +85,6 @@ impl LvClient {
             .expect("reqwest client build");
         Self {
             base: base.trim_end_matches('/').to_string(),
-            auth,
             http,
         }
     }
@@ -267,10 +269,10 @@ impl SandboxHttp for LvClient {
                         Some((path, matches))
                     })
                     .flat_map(|(path, matches)| {
-                        matches.iter().filter_map(move |m| {
+                        matches.iter().map(move |m| {
                             let line = m.get("line").and_then(|x| x.as_u64()).unwrap_or(0);
                             let text = m.get("text").and_then(|x| x.as_str()).unwrap_or("");
-                            Some(format!("{path}:{line}:{text}"))
+                            format!("{path}:{line}:{text}")
                         })
                     })
                     .collect()
