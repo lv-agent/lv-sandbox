@@ -25,14 +25,17 @@ impl SessionMap {
         http: &Arc<dyn SandboxHttp>,
         task_id: &str,
     ) -> Result<String, BridgeError> {
-        // fast path
-        if let Some(sid) = self.map.lock().await.get(task_id).cloned() {
+        // 持锁跨 create_session:避免并发首见同 task_id 时双建 session(TOCTOU —— 两个
+        // tool_invoked 都 miss 缓存、各建一个 session,后写覆盖前写 → work_dir 连续性断裂 +
+        // 孤儿 session)。tokio::Mutex 允许跨 .await 持有;创建每 task 一次(~ms),串行化可接受。
+        let mut map = self.map.lock().await;
+        if let Some(sid) = map.get(task_id).cloned() {
             return Ok(sid);
         }
         let mut metadata = HashMap::new();
         metadata.insert("fixus_task_id".to_string(), task_id.to_string());
         let sid = http.create_session(&self.profile, metadata, self.timeout_secs).await?;
-        self.map.lock().await.insert(task_id.to_string(), sid.clone());
+        map.insert(task_id.to_string(), sid.clone());
         Ok(sid)
     }
 

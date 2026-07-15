@@ -131,15 +131,21 @@ async fn run_consumer(
                 let payload: serde_json::Value = serde_json::from_slice(&rec.content).unwrap_or_default();
                 let tool_name = payload["tool_name"].as_str().unwrap_or("?").to_string();
                 let idempotency_key = payload["idempotency_key"].as_str().unwrap_or("?").to_string();
+                let tool_call_id = payload["tool_call_id"].as_str().unwrap_or("?").to_string();
                 let step_id = rec.metadata.get("step_id").cloned().unwrap_or_default();
                 let task_id = rec.metadata.get("task_id").cloned().unwrap_or_default();
                 let shard_id = rec.shard_id;
                 let seq = rec.seq;
 
+                // cr-087 §8:effective_policy 的 fs host 路径 scope 不翻译(session jail,比 stub 严)。记 warn 供观测。
+                if rec.metadata.contains_key("effective_policy") {
+                    tracing::warn!(task = %task_id, "effective_policy present but fs host-path scopes not translated (session-isolated)");
+                }
+
                 // 幂等命中:直接产缓存结果 + commit
                 if let Some(cached) = cache.get(&idempotency_key).await {
                     tracing::info!("cache hit: {}", idempotency_key);
-                    produce_result(&producer, &cli.namespace, result_stream, &step_id, &task_id, &tool_name, &cached).await;
+                    produce_result(&producer, &cli.namespace, result_stream, &step_id, &task_id, &tool_call_id, &tool_name, &cached).await;
                     let _ = consumer.commit_shard(shard_id, seq).await;
                     continue;
                 }
@@ -171,7 +177,7 @@ async fn run_consumer(
                     let r = idem::ToolResult { success, output, error, duration_ms: dur };
                     tracing::info!("executed {} task={} success={} duration_ms={}", tool_name, task_id, r.success, dur);
                     cache_clone.put(idempotency_key.clone(), r.clone()).await;
-                    produce_result(&prod, &ns, &rs, &step_id, &task_id, &tool_name, &r).await;
+                    produce_result(&prod, &ns, &rs, &step_id, &task_id, &tool_call_id, &tool_name, &r).await;
                     let _ = tx.send((shard_id, seq));
                 });
             }
@@ -188,17 +194,19 @@ async fn run_consumer(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn produce_result(
     producer: &Arc<tokio::sync::Mutex<BrokerProducer>>,
     namespace: &str,
     result_stream: &str,
     step_id: &str,
     task_id: &str,
+    tool_call_id: &str,
     tool_name: &str,
     r: &idem::ToolResult,
 ) {
     let result_payload = serde_json::json!({
-        "step_id": step_id, "task_id": task_id, "tool_name": tool_name,
+        "step_id": step_id, "task_id": task_id, "tool_call_id": tool_call_id, "tool_name": tool_name,
         "success": r.success, "output": r.output, "error": r.error, "duration_ms": r.duration_ms,
     });
     let content = serde_json::to_vec(&result_payload).unwrap_or_default();
