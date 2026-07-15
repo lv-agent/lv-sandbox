@@ -6,3 +6,46 @@ compatible, not wire-compatible.
 
     from lvsandbox_e2b import Sandbox, AsyncSandbox
 """
+from .exceptions import (
+    AuthenticationException,
+    CommandException,
+    CommandExitException,
+    E2BError,
+    FileException,
+    FileNotFoundException,
+    PermissionDeniedError,
+    PTYException,
+    RateLimitException,
+    SandboxException,
+    SandboxNotRunningError,
+    TemplateException,
+    TimeoutException,
+)
+from .models import FileInfo, Process, SandboxInfo, SnapshotInfo
+from .sandbox import Sandbox
+
+__all__ = [
+    # core
+    "Sandbox",
+    # models
+    "SandboxInfo",
+    "FileInfo",
+    "Process",
+    "SnapshotInfo",
+    # exceptions
+    "E2BError",
+    "SandboxException",
+    "TimeoutException",
+    "SandboxNotRunningError",
+    "FileException",
+    "FileNotFoundException",
+    "PermissionDeniedError",
+    "CommandException",
+    "CommandExitException",
+    "TemplateException",
+    "PTYException",
+    "AuthenticationException",
+    "RateLimitException",
+]
+
+__version__ = "0.1.0"
