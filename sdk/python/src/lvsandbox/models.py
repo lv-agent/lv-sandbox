@@ -130,3 +130,45 @@ class FileEntry:
             created_at=d.get("created_at"),
             symlink_target=d.get("symlink_target"),
         )
+
+
+@dataclass
+class FoundFile:
+    """cr-083 P1c: find 命中——workspace 相对 path + FileEntry。
+
+    server find 响应形如 ``{"files":[{"path":..,"entry":{FileEntry}}],...}``;
+    `path` 是相对 workspace 的全路径(可能含子目录),`entry.name` 仅是叶子名。
+    """
+
+    path: str
+    entry: "FileEntry" = field(default_factory=lambda: FileEntry("", 0, False))
+
+    @classmethod
+    def from_json(cls, d: dict) -> "FoundFile":
+        return cls(path=d.get("path", ""), entry=FileEntry.from_json(d.get("entry", {})))
+
+
+@dataclass
+class SearchMatch:
+    """cr-083 P1c: search 单行命中(`line` 1-based)。"""
+
+    line: int
+    text: str
+
+
+@dataclass
+class SearchHit:
+    """cr-083 P1c: search 单文件命中集(server grep 式结果)。"""
+
+    path: str
+    matches: list = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict) -> "SearchHit":
+        return cls(
+            path=d.get("path", ""),
+            matches=[
+                SearchMatch(line=m.get("line", 0), text=m.get("text", ""))
+                for m in d.get("matches", [])
+            ],
+        )

@@ -11,7 +11,7 @@ from typing import Any, Iterator, Optional
 import httpx
 
 from .errors import LvApiError
-from .models import FileEntry, JobResult, SessionInfo, StreamEvent
+from .models import FileEntry, FoundFile, JobResult, SearchHit, SessionInfo, StreamEvent
 from .sse import iter_sse
 
 
@@ -114,6 +114,38 @@ class _SessionFiles(_Base):
 
     def delete(self, path: str) -> dict:
         return self._c._delete(f"/api/v1/sessions/{self._sid}/files/{path}")
+
+    def make_dir(self, path: str) -> dict:
+        """cr-083 P1c: POST mkdir(workspace 相对 path)。"""
+        return self._c._post(
+            f"/api/v1/sessions/{self._sid}/mkdir", json={"path": path}
+        )
+
+    def exists(self, path: str) -> bool:
+        """cr-083 P1c: HEAD exists(200=True, 404=False, 其余≥400 抛)。裸状态,无 body。"""
+        resp = self._c._http.head(f"/api/v1/sessions/{self._sid}/files/{path}")
+        if resp.status_code == 404:
+            return False
+        _raise_for_status(resp)
+        return resp.status_code < 400
+
+    def find(self, pattern: str, *, path: str = "", limit: Optional[int] = None):
+        """cr-083 P1c: glob find。返回 list[FoundFile](path+entry)。truncated 暂不返回。"""
+        body: dict = {"pattern": pattern}
+        if path:
+            body["path"] = path
+        if limit is not None:
+            body["limit"] = limit
+        r = self._c._post(f"/api/v1/sessions/{self._sid}/files/find", json=body)
+        return [FoundFile.from_json(f) for f in r.get("files", [])]
+
+    def search(self, pattern: str, *, path: str = ""):
+        """cr-083 P1c: regex 内容搜索。返回 list[SearchHit](grep 式 line/text)。"""
+        body: dict = {"pattern": pattern}
+        if path:
+            body["path"] = path
+        r = self._c._post(f"/api/v1/sessions/{self._sid}/files/search", json=body)
+        return [SearchHit.from_json(h) for h in r.get("results", [])]
 
 
 class Session:

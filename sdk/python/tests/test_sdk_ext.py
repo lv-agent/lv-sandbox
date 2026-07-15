@@ -105,3 +105,70 @@ def test_watch_yields_created_modified_removed():
         {"event": "modified", "paths": ["a.txt"]},
         {"event": "removed", "paths": ["b.txt"]},
     ]
+
+
+# ----- P1c: mkdir/exists/find/search + 富模型 -----
+
+
+def test_make_dir_posts_path():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen.update(method=req.method, path=req.url.path, body=json.loads(req.content))
+        return httpx.Response(200, json={"ok": True})
+
+    c = _client(handler)
+    s = c.sessions.get("s1")
+    assert s.files.make_dir("a/b") == {"ok": True}
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/api/v1/sessions/s1/mkdir"
+    assert seen["body"] == {"path": "a/b"}
+
+
+def test_exists_200_true_404_false():
+    def handler(req: httpx.Request):
+        return httpx.Response(200 if req.url.path.endswith("/yes") else 404)
+
+    c = _client(handler)
+    s = c.sessions.get("s1")
+    assert s.files.exists("yes") is True
+    assert s.files.exists("no") is False
+
+
+def test_find_parses_files_with_path_and_entry():
+    payload = {
+        "files": [
+            {
+                "path": "sub/a.py",
+                "entry": {"name": "a.py", "size": 10, "is_dir": False, "mode": 33188},
+            }
+        ],
+        "truncated": False,
+    }
+
+    def handler(req: httpx.Request):
+        return httpx.Response(200, json=payload)
+
+    c = _client(handler)
+    s = c.sessions.get("s1")
+    found = s.files.find("**/*.py")
+    assert found[0].path == "sub/a.py"
+    assert found[0].entry.name == "a.py"
+    assert found[0].entry.mode == 0o100644
+
+
+def test_search_parses_results_with_matches():
+    payload = {
+        "results": [{"path": "code.py", "matches": [{"line": 2, "text": "TODO: fix"}]}],
+        "truncated": True,
+    }
+
+    def handler(req: httpx.Request):
+        return httpx.Response(200, json=payload)
+
+    c = _client(handler)
+    s = c.sessions.get("s1")
+    res = s.files.search("TODO")
+    assert res[0].path == "code.py"
+    assert res[0].matches[0].line == 2
+    assert res[0].matches[0].text == "TODO: fix"
