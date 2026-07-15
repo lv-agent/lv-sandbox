@@ -4,6 +4,7 @@
 //! HTTP(session exec + 文件 API),再产 `tool-result-{region}`。fixus 零改动。
 
 mod error;
+mod idem;
 mod lv_client;
 mod session_map;
 
