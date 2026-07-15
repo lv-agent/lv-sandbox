@@ -1,3 +1,4 @@
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -314,11 +315,26 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), CoreError> {
 // ==================== cr-026: 文件 I/O(会话工作区) ====================
 
 /// 目录条目(list_files 返回)。
+/// cr-085 M1: 补 mode/owner/group/时间戳/symlink_target(对齐 E2B FileInfo)。
 #[derive(Debug, Clone, Serialize)]
 pub struct FileEntry {
     pub name: String,
     pub size: u64,
     pub is_dir: bool,
+    /// 是否符号链接(基于 symlink_metadata,不跟随)。
+    pub is_symlink: bool,
+    /// 完整 st_mode(含文件类型位,POSIX 风格,对齐 Python stat.st_mode)。
+    pub mode: u32,
+    /// 所有者用户名(getpwuid_r 解析,失败 fallback uid 数字字符串)。
+    pub owner: String,
+    /// 所属组名(getgrgid_r 解析,失败 fallback gid 数字字符串)。
+    pub group: String,
+    /// mtime,Unix 秒。
+    pub modified_at: Option<i64>,
+    /// ctime(inode change;Linux 无通用 birth time,作为 created_at 的妥协)。
+    pub created_at: Option<i64>,
+    /// 符号链接目标路径(仅 is_symlink=true)。
+    pub symlink_target: Option<String>,
 }
 
 /// cr-026: 规范化相对路径,圈在 base 内。拒空、绝对路径、含 `..`(ParentDir 组件)。
@@ -361,6 +377,7 @@ pub fn get_file(base: &Path, rel: &str) -> Result<Vec<u8>, CoreError> {
 }
 
 /// 列目录(返回条目)。空 rel = base 根目录。
+/// cr-085 M1: 用 symlink_metadata(不跟随符号链接),填充富元数据。
 pub fn list_files(base: &Path, rel: &str) -> Result<Vec<FileEntry>, CoreError> {
     let dir = if rel.is_empty() {
         base.to_path_buf()
@@ -370,14 +387,92 @@ pub fn list_files(base: &Path, rel: &str) -> Result<Vec<FileEntry>, CoreError> {
     let mut entries = Vec::new();
     for e in std::fs::read_dir(&dir)? {
         let e = e?;
-        let md = e.metadata()?;
-        entries.push(FileEntry {
-            name: e.file_name().to_string_lossy().into_owned(),
-            size: md.len(),
-            is_dir: md.is_dir(),
-        });
+        let path = e.path();
+        // symlink_metadata:不跟随 symlink,才能识别 symlink 本身及其自身 size/mode。
+        let md = std::fs::symlink_metadata(&path)?;
+        entries.push(build_file_entry(&path, &md));
     }
     Ok(entries)
+}
+
+/// cr-085 M6: 从单个路径建 FileEntry(symlink_metadata,复用 list_files 富元数据逻辑)。
+/// 供 server 侧 find/search 按需取单条目,避免重复 uid→name/symlink 解析。
+/// 路径不存在 → Err(io NotFound)。
+pub fn file_entry(path: &Path) -> Result<FileEntry, CoreError> {
+    let md = std::fs::symlink_metadata(path)?;
+    Ok(build_file_entry(path, &md))
+}
+
+/// cr-085 M1/M6: 从 symlink_metadata + 路径构造 FileEntry(name 取 basename)。
+/// M6 从 list_files 抽出,供 file_entry(单路径)复用。
+fn build_file_entry(path: &Path, md: &std::fs::Metadata) -> FileEntry {
+    let is_symlink = md.file_type().is_symlink();
+    let symlink_target = if is_symlink {
+        std::fs::read_link(path)
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+    } else {
+        None
+    };
+    FileEntry {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        size: md.len(),
+        is_dir: md.is_dir(),
+        is_symlink,
+        mode: md.mode(),
+        owner: user_name(md.uid()),
+        group: group_name(md.gid()),
+        modified_at: Some(md.mtime()),
+        created_at: Some(md.ctime()),
+        symlink_target,
+    }
+}
+
+/// cr-085 M1: uid → 用户名(getpwuid_r,线程安全;失败 fallback uid 数字)。
+fn user_name(uid: u32) -> String {
+    let mut buf = [0u8; 1024];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut pwd,
+            buf.as_mut_ptr() as *mut libc::c_char,
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 || result.is_null() {
+        return uid.to_string();
+    }
+    unsafe { std::ffi::CStr::from_ptr((*result).pw_name) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// cr-085 M1: gid → 组名(getgrgid_r,线程安全;失败 fallback gid 数字)。
+fn group_name(gid: u32) -> String {
+    let mut buf = [0u8; 1024];
+    let mut grp: libc::group = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getgrgid_r(
+            gid,
+            &mut grp,
+            buf.as_mut_ptr() as *mut libc::c_char,
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 || result.is_null() {
+        return gid.to_string();
+    }
+    unsafe { std::ffi::CStr::from_ptr((*result).gr_name) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// 删除文件或目录。
@@ -391,6 +486,21 @@ pub fn delete_file(base: &Path, rel: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// cr-085 M5: 建目录(sanitize 圈定,递归 create_dir_all)。E2B filesystem.make_dir。
+pub fn make_dir(base: &Path, rel: &str) -> Result<(), CoreError> {
+    let path = sanitize_relpath(base, rel)?;
+    std::fs::create_dir_all(path)?;
+    Ok(())
+}
+
+/// cr-085 M5: 路径是否存在(文件或目录;symlink_metadata 不跟随 symlink)。E2B filesystem.exists。
+pub fn exists(base: &Path, rel: &str) -> bool {
+    match sanitize_relpath(base, rel) {
+        Ok(p) => p.symlink_metadata().is_ok(),
+        Err(_) => false,
+    }
+}
+
 /// 单个 job 的工作空间路径
 #[derive(Debug, Clone)]
 pub struct JobWorkspace {
@@ -399,4 +509,60 @@ pub struct JobWorkspace {
     pub tmp: PathBuf,
     pub input: PathBuf,
     pub output: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// cr-085 M1: list_files 返回 mode 权限位 + owner/group(E2B FileInfo 对齐)。
+    #[test]
+    fn list_files_returns_mode_owner_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::write(base.join("a.txt"), b"hi").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            base.join("a.txt"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let entries = list_files(base, "").unwrap();
+        let a = entries.iter().find(|e| e.name == "a.txt").unwrap();
+        assert_eq!(a.mode & 0o777, 0o644, "mode low 9 bits = permissions");
+        assert!(!a.owner.is_empty(), "owner resolved");
+        assert!(!a.group.is_empty(), "group resolved");
+    }
+
+    /// cr-085 M1: symlink 不被跟随——识别为 symlink + 给出 target,size 为 symlink 自身(非 target 内容)。
+    /// 若实现回退为 e.metadata()(跟随),size 断言会失败 → 测试有效。
+    #[test]
+    fn list_files_identifies_symlink_without_following() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::write(base.join("target.txt"), b"target-content-12345").unwrap();
+        std::os::unix::fs::symlink("target.txt", base.join("link.txt")).unwrap();
+
+        let entries = list_files(base, "").unwrap();
+        let link = entries.iter().find(|e| e.name == "link.txt").unwrap();
+        assert!(link.is_symlink, "link 识别为 symlink");
+        assert_eq!(link.symlink_target.as_deref(), Some("target.txt"));
+        // size 是 symlink 自身(target 路径字节数),非 target 文件内容长度
+        assert_eq!(link.size, "target.txt".len() as u64);
+        assert!(!link.is_dir);
+    }
+
+    /// cr-085 M1: modified_at/created_at 填充(unix 秒,非零)。
+    #[test]
+    fn list_files_returns_timestamps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::write(base.join("a.txt"), b"hi").unwrap();
+
+        let entries = list_files(base, "").unwrap();
+        let a = entries.iter().find(|e| e.name == "a.txt").unwrap();
+        assert!(a.modified_at.unwrap_or(0) > 0, "modified_set");
+        assert!(a.created_at.unwrap_or(0) > 0, "created_set");
+    }
 }
