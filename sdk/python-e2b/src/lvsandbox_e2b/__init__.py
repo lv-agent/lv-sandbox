@@ -22,11 +22,12 @@ from .exceptions import (
     TimeoutException,
 )
 from .models import FileInfo, Process, SandboxInfo, SnapshotInfo
-from .sandbox import Sandbox
+from .sandbox import AsyncSandbox, Sandbox
 
 __all__ = [
     # core
     "Sandbox",
+    "AsyncSandbox",
     # models
     "SandboxInfo",
     "FileInfo",

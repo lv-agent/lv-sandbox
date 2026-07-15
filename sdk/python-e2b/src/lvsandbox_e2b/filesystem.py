@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional
 
-from ._handle import translating
+from ._handle import translating, translating_async
 from .models import FileInfo
 
 
@@ -85,6 +85,88 @@ class Filesystem:
             for ev in self._c.sessions.get(self._sid).watch(
                 _rel(path), timeout_secs=int(timeout or 60)
             ):
+                on_event(ev)
+                if deadline and time.time() > deadline:
+                    break
+        if on_exit:
+            on_exit()
+
+
+class AsyncFilesystem:
+    """Async counterpart of :class:`Filesystem` (cr-083 §6.2 AsyncSandbox)。"""
+
+    def __init__(self, client, sandbox_id: str):
+        self._c = client
+        self._sid = sandbox_id
+
+    async def _files(self):
+        return (await self._c.sessions.get(self._sid)).files
+
+    async def read(self, path, *, format: str = "text", user: str = "user"):
+        async with translating_async("file"):
+            f = await self._files()
+            data = await f.get(_rel(path))
+        return data.decode() if format == "text" else data
+
+    async def write(self, path, data, *, user: str = "user") -> FileInfo:
+        if isinstance(data, str):
+            data = data.encode()
+        async with translating_async("file"):
+            f = await self._files()
+            await f.put(_rel(path), data)
+        return FileInfo(name=_basename(path))
+
+    async def list(self, path, *, user: str = "user") -> list:
+        async with translating_async("file"):
+            f = await self._files()
+            entries = await f.list(_rel(path))
+        return [FileInfo.from_file_entry(e) for e in entries]
+
+    async def remove(self, path, *, user: str = "user") -> None:
+        async with translating_async("file"):
+            f = await self._files()
+            await f.delete(_rel(path))
+
+    async def make_dir(self, path, *, user: str = "user") -> FileInfo:
+        async with translating_async("file"):
+            f = await self._files()
+            await f.make_dir(_rel(path))
+        return FileInfo(name=_basename(path), is_dir=True)
+
+    async def exists(self, path, *, user: str = "user") -> bool:
+        async with translating_async("file"):
+            f = await self._files()
+            return await f.exists(_rel(path))
+
+    async def find(self, path, pattern, *, user: str = "user") -> list:
+        async with translating_async("file"):
+            f = await self._files()
+            found = await f.find(pattern, path=_rel(path))
+        out = []
+        for ff in found:
+            fi = FileInfo.from_file_entry(ff.entry)
+            fi.name = ff.path
+            out.append(fi)
+        return out
+
+    async def search(self, path, pattern, *, user: str = "user") -> list:
+        async with translating_async("file"):
+            f = await self._files()
+            return await f.search(pattern, path=_rel(path))
+
+    async def watch_dir(
+        self,
+        path,
+        on_event: Callable,
+        *,
+        on_exit: Optional[Callable] = None,
+        timeout: Optional[float] = None,
+        user: str = "user",
+    ):
+        deadline = time.time() + timeout if timeout else None
+        async with translating_async("file"):
+            s = await self._c.sessions.get(self._sid)
+            async for ev in s.watch(_rel(path), timeout_secs=int(timeout or 60)):
                 on_event(ev)
                 if deadline and time.time() > deadline:
                     break
