@@ -211,3 +211,68 @@ async fn produce_result(
         tracing::error!("broker produce result failed: {}", e);
     }
 }
+
+/// cr-087 live integration:验证 LvClient(reqwest)+ translate 对真实 lv-sandbox server。
+/// 需 server 在 :8080。`cargo test -p sandbox-broker live -- --ignored`(无 server 自动 skip)。
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::translate;
+
+    /// 探活:命中 lv-sandbox 专属路由 `/api/v1/profiles`(200 无鉴权 / 401 鉴权开)才算"对的 server 在"。
+    /// 不用 `/health`——它 auth-exempt 且 shape 通用,任何 squat 在 :8080 的服务(如本机 mygate)
+    /// 都会回 200,导致测试误闯入并 404 失败而非 skip。404 / 连接失败 → 判定不可用 → skip。
+    async fn sandbox_up() -> bool {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(1))
+            .build().unwrap()
+            .get("http://127.0.0.1:8080/api/v1/profiles").send().await
+            .map(|r| r.status().is_success() || r.status().as_u16() == 401)
+            .unwrap_or(false)
+    }
+
+    async fn lv() -> Arc<dyn lv_client::SandboxHttp> {
+        LvClient::new("http://127.0.0.1:8080".into(), None, std::time::Duration::from_secs(60)).arc()
+    }
+
+    #[tokio::test]
+    #[ignore = "需 live lv-sandbox sandbox-server (:8080)"]
+    async fn bash_exec_against_live_server() {
+        if !sandbox_up().await {
+            eprintln!("skip: lv-sandbox server not reachable on :8080");
+            return;
+        }
+        let http = lv().await;
+        let sessions = SessionMap::new("shell".into(), 300);
+        let r = translate::execute(
+            "fixus_bash",
+            &serde_json::json!({"command": "echo cr087live"}),
+            10, "live-test-task", &http, &sessions,
+        ).await.expect("bash exec should succeed against live server");
+        assert!(r.success, "bash should exit 0; error={:?}", r.error);
+        let stdout = r.output["stdout"].as_str().unwrap_or("");
+        assert!(stdout.contains("cr087live"), "stdout should contain marker: {}", stdout);
+    }
+
+    #[tokio::test]
+    #[ignore = "需 live lv-sandbox sandbox-server (:8080)"]
+    async fn write_then_read_roundtrip() {
+        if !sandbox_up().await {
+            eprintln!("skip: lv-sandbox server not reachable on :8080");
+            return;
+        }
+        let http = lv().await;
+        let sessions = SessionMap::new("shell".into(), 300);
+        let task = "live-rw-task";
+        // write
+        let w = translate::execute("fixus_write",
+            &serde_json::json!({"file_path": "cr087.txt", "content": "hello live"}), 0, task, &http, &sessions).await.unwrap();
+        assert!(w.success, "write failed: {:?}", w.error);
+        // read back (same task → same session → sees the file)
+        let r = translate::execute("fixus_read",
+            &serde_json::json!({"file_path": "cr087.txt"}), 0, task, &http, &sessions).await.unwrap();
+        assert!(r.success, "read failed: {:?}", r.error);
+        let content = r.output["content"].as_str().unwrap_or("");
+        assert_eq!(content, "hello live", "read-back content mismatch");
+    }
+}
