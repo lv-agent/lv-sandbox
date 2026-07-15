@@ -222,17 +222,24 @@ mod live {
     /// 探活:命中 lv-sandbox 专属路由 `/api/v1/profiles`(200 无鉴权 / 401 鉴权开)才算"对的 server 在"。
     /// 不用 `/health`——它 auth-exempt 且 shape 通用,任何 squat 在 :8080 的服务(如本机 mygate)
     /// 都会回 200,导致测试误闯入并 404 失败而非 skip。404 / 连接失败 → 判定不可用 → skip。
+    /// 测试目标 server base URL。默认 :8080(lv-sandbox 默认);可用
+    /// `SANDBOX_BRIDGE_TEST_URL` 覆盖(本地 :8080 被 squat 时跑别的端口)。
+    fn base() -> String {
+        std::env::var("SANDBOX_BRIDGE_TEST_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+    }
+
     async fn sandbox_up() -> bool {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(1))
             .build().unwrap()
-            .get("http://127.0.0.1:8080/api/v1/profiles").send().await
+            .get(format!("{}/api/v1/profiles", base())).send().await
             .map(|r| r.status().is_success() || r.status().as_u16() == 401)
             .unwrap_or(false)
     }
 
     async fn lv() -> Arc<dyn lv_client::SandboxHttp> {
-        LvClient::new("http://127.0.0.1:8080".into(), None, std::time::Duration::from_secs(60)).arc()
+        LvClient::new(base(), None, std::time::Duration::from_secs(60)).arc()
     }
 
     #[tokio::test]
