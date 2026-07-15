@@ -30,6 +30,12 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 axum = { workspace = true }
 regex = { workspace = true }
+# cr-085 M6: find(glob 匹配)+ search(内容正则)遍历
+globset = { workspace = true }
+walkdir = { workspace = true }
+# cr-085 M7: 文件 watch(notify → SSE)
+notify = { workspace = true }
+async-stream = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
 libc = { workspace = true }

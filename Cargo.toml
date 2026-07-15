@@ -49,8 +49,16 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# 正则（输出脱敏 cr-018+#78）
+# 正则（输出脱敏 cr-018+#78 / cr-085 M6 search）
 regex = "1"
+
+# cr-085 M6: 文件 find(glob 匹配)+ 遍历
+globset = "0.4"
+walkdir = "2"
+
+# cr-085 M7: 文件 watch(FS 事件 → SSE)
+notify = "6"
+async-stream = "0.3"
 
 # 并发
 dashmap = "5"
