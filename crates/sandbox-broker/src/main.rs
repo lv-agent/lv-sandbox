@@ -7,6 +7,7 @@ mod error;
 mod idem;
 mod lv_client;
 mod session_map;
+mod translate;
 
 use clap::Parser;
 
