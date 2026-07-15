@@ -65,7 +65,86 @@ pub async fn execute(
             let j = http.exec(&sid, vec!["rg".into(), pattern.into(), path.into()], to.clone(), None).await?;
             Ok(ok_exec(&j))
         }
-        // 文件工具见 T6
+        "fixus_read" => {
+            let file_path = input.get("file_path").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("file_path"))?;
+            let bytes = http.get_file(&sid, file_path).await?;
+            let content = String::from_utf8_lossy(&bytes).to_string();
+            let lines: Vec<&str> = content.lines().collect();
+            let offset = input.get("offset").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+            let limit = input.get("limit").and_then(|v| v.as_i64());
+            let start = offset.min(lines.len());
+            let end = match limit { Some(l) if l > 0 => (start + l as usize).min(lines.len()), _ => lines.len() };
+            Ok(ToolOutput {
+                success: true,
+                output: serde_json::json!({
+                    "content": lines[start..end].join("\n"),
+                    "total_lines": lines.len(),
+                    "lines_returned": end - start,
+                    "offset": start,
+                }),
+                error: None,
+            })
+        }
+        "fixus_write" => {
+            let file_path = input.get("file_path").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("file_path"))?;
+            let content = input.get("content").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("content"))?;
+            http.put_file(&sid, file_path, content.as_bytes().to_vec()).await?;
+            Ok(ToolOutput {
+                success: true,
+                output: serde_json::json!({ "bytes_written": content.len(), "file_path": file_path }),
+                error: None,
+            })
+        }
+        "fixus_edit" => {
+            let file_path = input.get("file_path").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("file_path"))?;
+            let old = input.get("old_string").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("old_string"))?;
+            let new = input.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+            let bytes = http.get_file(&sid, file_path).await?;
+            let content = String::from_utf8_lossy(&bytes).to_string();
+            if !content.contains(old) {
+                return Ok(ToolOutput {
+                    success: false,
+                    output: serde_json::Value::Null,
+                    error: Some(format!("old_string not found in {}", file_path)),
+                });
+            }
+            let replaced = content.replacen(old, new, 1);
+            http.put_file(&sid, file_path, replaced.as_bytes().to_vec()).await?;
+            Ok(ToolOutput {
+                success: true,
+                output: serde_json::json!({ "file_path": file_path, "replaced": true, "bytes_written": replaced.len() }),
+                error: None,
+            })
+        }
+        "fixus_glob" => {
+            let pattern = input.get("pattern").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("pattern"))?;
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let files = http.find(&sid, path, pattern).await?;
+            let count = files.len();
+            Ok(ToolOutput {
+                success: true,
+                output: serde_json::json!({ "files": files, "count": count, "pattern": pattern }),
+                error: None,
+            })
+        }
+        "fixus_grep" => {
+            let pattern = input.get("pattern").and_then(|v| v.as_str())
+                .ok_or(BridgeError::MissingField("pattern"))?;
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let results = http.search(&sid, path, pattern).await?;
+            let count = results.len();
+            Ok(ToolOutput {
+                success: true,
+                output: serde_json::json!({ "matches": results.join("\n"), "count": count, "pattern": pattern }),
+                error: None,
+            })
+        }
         _ => Err(BridgeError::UnknownTool(tool_name.to_string())),
     }
 }
@@ -159,5 +238,84 @@ mod tests {
         let (_m, http, sm) = setup("Completed", 0);
         let r = execute("fixus_nope", &serde_json::json!({}), 0, "t1", &http, &sm).await;
         assert!(matches!(r, Err(BridgeError::UnknownTool(_))));
+    }
+
+    /// 内存文件存储 mock:get/put 真读写,find/search 返回固定 stub。
+    struct FileMock {
+        files: Mutex<HashMap<String, Vec<u8>>>,
+        find_ret: Vec<String>,
+        search_ret: Vec<String>,
+    }
+    #[async_trait::async_trait]
+    impl SandboxHttp for FileMock {
+        async fn create_session(&self, _: &str, _: HashMap<String, String>, _: u64) -> Result<String, BridgeError> { Ok("sess".into()) }
+        async fn exec(&self, _: &str, _: Vec<String>, _: Option<String>, _: Option<String>) -> Result<JobResult, BridgeError> { unreachable!() }
+        async fn get_file(&self, _: &str, path: &str) -> Result<Vec<u8>, BridgeError> {
+            self.files.lock().await.get(path).cloned()
+                .ok_or_else(|| BridgeError::Status { status: 404, body: "not found".into() })
+        }
+        async fn put_file(&self, _: &str, path: &str, bytes: Vec<u8>) -> Result<(), BridgeError> {
+            self.files.lock().await.insert(path.into(), bytes); Ok(())
+        }
+        async fn head_file(&self, _: &str, _: &str) -> Result<bool, BridgeError> { unreachable!() }
+        async fn find(&self, _: &str, _: &str, _: &str) -> Result<Vec<String>, BridgeError> { Ok(self.find_ret.clone()) }
+        async fn search(&self, _: &str, _: &str, _: &str) -> Result<Vec<String>, BridgeError> { Ok(self.search_ret.clone()) }
+        async fn destroy_session(&self, _: &str) -> Result<(), BridgeError> { unreachable!() }
+    }
+
+    fn file_mock(files: Vec<(&str, &str)>) -> (Arc<FileMock>, Arc<dyn SandboxHttp>, SessionMap) {
+        let m = Arc::new(FileMock {
+            files: Mutex::new(files.into_iter().map(|(k, v)| (k.into(), v.as_bytes().to_vec())).collect()),
+            find_ret: vec!["a.rs".into(), "b.rs".into()],
+            search_ret: vec!["a.rs:1:TODO".into()],
+        });
+        let http: Arc<dyn SandboxHttp> = m.clone();
+        (m, http, SessionMap::new("shell".into(), 3600))
+    }
+
+    #[tokio::test]
+    async fn read_full_then_offset_limit() {
+        let (_m, http, sm) = file_mock(vec![("f", "a\nb\nc\nd\ne")]);
+        let r = execute("fixus_read", &serde_json::json!({"file_path": "f"}), 0, "t", &http, &sm).await.unwrap();
+        assert_eq!(r.output["content"], "a\nb\nc\nd\ne");
+        assert_eq!(r.output["total_lines"], 5);
+        let r2 = execute("fixus_read", &serde_json::json!({"file_path": "f", "offset": 1, "limit": 2}), 0, "t", &http, &sm).await.unwrap();
+        assert_eq!(r2.output["content"], "b\nc");
+        assert_eq!(r2.output["lines_returned"], 2);
+    }
+
+    #[tokio::test]
+    async fn write_puts_bytes() {
+        let (m, http, sm) = file_mock(vec![]);
+        let r = execute("fixus_write", &serde_json::json!({"file_path": "out", "content": "hello"}), 0, "t", &http, &sm).await.unwrap();
+        assert!(r.success);
+        assert_eq!(r.output["bytes_written"], 5);
+        assert_eq!(m.files.lock().await.get("out").unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn edit_replaces_once() {
+        let (m, http, sm) = file_mock(vec![("f", "hello world")]);
+        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "world", "new_string": "rust"}), 0, "t", &http, &sm).await.unwrap();
+        assert!(r.success);
+        assert_eq!(m.files.lock().await.get("f").unwrap(), b"hello rust");
+    }
+
+    #[tokio::test]
+    async fn edit_missing_old_string_fails() {
+        let (_m, http, sm) = file_mock(vec![("f", "hello")]);
+        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "nope", "new_string": "x"}), 0, "t", &http, &sm).await.unwrap();
+        assert!(!r.success);
+        assert!(r.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn glob_and_grep_shape() {
+        let (_m, http, sm) = file_mock(vec![]);
+        let g = execute("fixus_glob", &serde_json::json!({"pattern": "*.rs"}), 0, "t", &http, &sm).await.unwrap();
+        assert_eq!(g.output["count"], 2);
+        let gr = execute("fixus_grep", &serde_json::json!({"pattern": "TODO"}), 0, "t", &http, &sm).await.unwrap();
+        assert_eq!(gr.output["count"], 1);
+        assert!(gr.output["matches"].as_str().unwrap().contains("TODO"));
     }
 }
