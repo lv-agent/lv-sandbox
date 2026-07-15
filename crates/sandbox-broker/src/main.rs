@@ -3,6 +3,9 @@
 //! 以 broker GroupConsumer 身份消费 fixus `tool-invoke-{region}`,翻成 lv-sandbox
 //! HTTP(session exec + 文件 API),再产 `tool-result-{region}`。fixus 零改动。
 
+mod error;
+mod lv_client;
+
 use clap::Parser;
 
 #[derive(Parser)]
