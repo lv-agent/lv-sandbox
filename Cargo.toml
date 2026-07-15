@@ -8,6 +8,7 @@ members = [
     "crates/sandbox-server",
     "crates/sandbox-mcp",
     "crates/lv-cli",
+    "crates/sandbox-broker",
     "tests/e2e",
 ]
 
@@ -88,3 +89,7 @@ reqwest = { version = "0.12", features = ["json"] }
 rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
 schemars = "1"
 uuid = { version = "1", features = ["v4"] }
+
+# cr-087: fixus broker bridge 消费侧
+logdb-client = { path = "../../logdb/lv-logdb/logdb-client", features = ["broker"] }
+logdb-broker-proto = { path = "../../logdb/lv-logdb/logdb-broker-proto" }

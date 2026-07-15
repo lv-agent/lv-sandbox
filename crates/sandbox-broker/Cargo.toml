@@ -1,0 +1,29 @@
+[package]
+name = "sandbox-broker"
+description = "fixus broker bridge — consumes tool-invoke, delegates to lv-sandbox HTTP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "sandbox-broker"
+path = "src/main.rs"
+
+[dependencies]
+logdb-client = { workspace = true }
+logdb-broker-proto = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+tempfile = "3"
