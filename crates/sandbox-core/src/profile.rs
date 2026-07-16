@@ -161,6 +161,21 @@ impl SandboxProfile {
     /// CA 信任:operator 经 `FIXUS_GIT_CA_FILE` 指向 PEM 文件 → 以 `SANDBOX_CA_PEM`
     /// 注入 jail env(helper dialer 据此信任自签/内网 CA 上游,如自托管 GitLab)。
     pub fn git() -> Self {
+        // env 覆盖解析集中在这一层;profile 构造下沉到 git_inner(纯函数,便于并行单测,
+        // 不碰进程级 env)。default 见各 env 的 unwrap_or。
+        let host = std::env::var("FIXUS_GIT_EGRESS_HOST")
+            .unwrap_or_else(|_| "github.com".to_string());
+        let port = std::env::var("FIXUS_GIT_EGRESS_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(443);
+        let ca_pem = read_git_ca_pem();
+        Self::git_inner(&host, port, ca_pem.as_deref())
+    }
+
+    /// cr-12: git profile 构造(纯函数,无 env 读取)。把 host/port/CA 作为显式入参,
+    /// 使行为可并行单测(避免进程级 env 在并行测试下竞态)。env → 入参胶水在 [`SandboxProfile::git`]。
+    fn git_inner(host: &str, port: u16, ca_pem: Option<&str>) -> Self {
         let mut p = Self::shell();
         p.name = "git".into();
         p.rlimit = RlimitConfig::new()
@@ -173,19 +188,13 @@ impl SandboxProfile {
             .memlock_disabled();
         p.default_timeout = Duration::from_secs(300);
         p.egress_allowlist = vec![crate::egress::EgressRule {
-            host: std::env::var("FIXUS_GIT_EGRESS_HOST")
-                .unwrap_or_else(|_| "github.com".to_string()),
+            host: host.to_string(),
             // 默认 443;operator 可经 FIXUS_GIT_EGRESS_PORT 覆盖(凭据出口代理跑非 443 时)。
-            port: Some(
-                std::env::var("FIXUS_GIT_EGRESS_PORT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(443),
-            ),
+            port: Some(port),
         }];
         // cr-12 CA 注入(见 read_git_ca_pem)。env 通道免 jail fs 依赖。
-        if let Some(pem) = read_git_ca_pem() {
-            p.env.insert("SANDBOX_CA_PEM".to_string(), pem);
+        if let Some(pem) = ca_pem {
+            p.env.insert("SANDBOX_CA_PEM".to_string(), pem.to_string());
         }
         // cr-12: git 以 O_RDWR 打开 /dev/null(plumbing / 默认空对象),而 landlock
         // device_paths() 只授 /dev/null ReadOnly → 拒写 → "could not open '/dev/null'
@@ -197,20 +206,26 @@ impl SandboxProfile {
 
 /// cr-12: 读 operator 提供的 git CA(env `FIXUS_GIT_CA_FILE` 指向 PEM 文件)→ PEM 内容。
 /// 供 [`SandboxProfile::git`] 注入 `SANDBOX_CA_PEM`(helper dialer 据此信任自签/内网 CA)。
-/// env 未设 / 路径空 / 文件不可读 / 内容空 → None(helper 回退 webpki 内置根)。
-/// 失败时 warn,便于 operator 排错(TLS 失败时能看到 CA 未加载)。
+/// env 未设 / 路径空 → None;文件层(不可读 / 内容空)交给 [`read_ca_pem_from_path`]。
 fn read_git_ca_pem() -> Option<String> {
     let path = std::env::var("FIXUS_GIT_CA_FILE")
         .ok()
         .filter(|s| !s.is_empty())?;
-    match std::fs::read_to_string(&path) {
+    read_ca_pem_from_path(std::path::Path::new(&path))
+}
+
+/// cr-12: 从 PEM 文件读 CA 内容。文件不可读 / 内容空 → None(helper 回退 webpki 内置根)。
+/// 抽成入参为 path 的纯函数,便于单测(不碰进程级 env)。
+/// 失败时 warn,便于 operator 排错(TLS 失败时能看到 CA 未加载)。
+fn read_ca_pem_from_path(path: &std::path::Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
         Ok(pem) if !pem.trim().is_empty() => Some(pem),
         Ok(_) => {
-            tracing::warn!(path = %path, "FIXUS_GIT_CA_FILE empty; git jail uses builtin CA roots");
+            tracing::warn!(path = %path.display(), "FIXUS_GIT_CA_FILE empty; git jail uses builtin CA roots");
             None
         }
         Err(e) => {
-            tracing::warn!(path = %path, error = %e, "FIXUS_GIT_CA_FILE unreadable; git jail uses builtin CA roots");
+            tracing::warn!(path = %path.display(), error = %e, "FIXUS_GIT_CA_FILE unreadable; git jail uses builtin CA roots");
             None
         }
     }
@@ -293,16 +308,57 @@ mod tests {
         assert!(g.rlimit.nofile > s.rlimit.nofile, "nofile must be larger");
     }
 
-    // cr-12 CA 注入测试。注意:本组测试改进程级 env,须串行跑(--test-threads=1)。
+    // cr-12 CA 路径(进程唯一,避免跨 test-binary 碰撞)。仅被 path 测试 + env smoke 用,
+    // 同进程内同一时刻至多一个持有(mutex 序列化)→ 无并发竞态。
     fn scratch_ca_path() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fixus-git-ca-test-{}.pem", std::process::id()))
     }
 
+    // 序列化所有动 FIXUS_GIT_* 进程级 env 的测试:同一进程内至多一个持有,杜绝并行竞态
+    // (此前 git_profile_injects_* 与 *_no_ca_* 互改 FIXUS_GIT_CA_FILE 在并行下 flaky)。
+    static GIT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn lock_git_env() -> std::sync::MutexGuard<'static, ()> {
+        GIT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
-    fn git_profile_injects_ca_pem_from_fixus_git_ca_file() {
+    fn git_profile_injects_ca_pem_when_provided() {
+        // 纯 seam:行为可并行测,不碰进程 env。
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
+        let g = SandboxProfile::git_inner("github.com", 443, Some(pem));
+        assert_eq!(
+            g.env.get("SANDBOX_CA_PEM").map(String::as_str),
+            Some(pem),
+            "CA provided → SANDBOX_CA_PEM injected verbatim"
+        );
+    }
+
+    #[test]
+    fn git_profile_no_ca_when_absent() {
+        let g = SandboxProfile::git_inner("github.com", 443, None);
+        assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "no CA → no injection");
+    }
+
+    #[test]
+    fn read_ca_pem_from_path_roundtrip_missing_empty() {
+        let p = scratch_ca_path();
+        let _ = std::fs::remove_file(&p);
+        assert!(read_ca_pem_from_path(&p).is_none(), "missing file → None");
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
+        std::fs::write(&p, pem).unwrap();
+        assert_eq!(read_ca_pem_from_path(&p).as_deref(), Some(pem), "valid PEM → content");
+        std::fs::write(&p, "   \n ").unwrap();
+        assert!(read_ca_pem_from_path(&p).is_none(), "empty file → None");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn git_reads_fixus_git_ca_file_env() {
+        // env → 入参 胶水冒烟(唯一动 FIXUS_GIT_CA_FILE 的测试;mutex 序列化)。
+        let _g = lock_git_env();
         let ca_path = scratch_ca_path();
         let _ = std::fs::remove_file(&ca_path);
-        let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBenvPEM\n-----END CERTIFICATE-----\n";
         std::fs::write(&ca_path, pem).unwrap();
         std::env::set_var("FIXUS_GIT_CA_FILE", &ca_path);
         let g = SandboxProfile::git();
@@ -311,21 +367,8 @@ mod tests {
         assert_eq!(
             g.env.get("SANDBOX_CA_PEM").map(String::as_str),
             Some(pem),
-            "FIXUS_GIT_CA_FILE set → SANDBOX_CA_PEM injected verbatim"
+            "FIXUS_GIT_CA_FILE → SANDBOX_CA_PEM wiring"
         );
-    }
-
-    #[test]
-    fn git_profile_no_ca_when_unset_or_unreadable() {
-        // 未设 → 不注入
-        std::env::remove_var("FIXUS_GIT_CA_FILE");
-        let g = SandboxProfile::git();
-        assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unset → no injection");
-        // 指向不存在的文件 → 跳过(不注入;helper 回退 webpki 根)
-        std::env::set_var("FIXUS_GIT_CA_FILE", "/nonexistent/fixus-git-ca.pem");
-        let g = SandboxProfile::git();
-        std::env::remove_var("FIXUS_GIT_CA_FILE");
-        assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unreadable CA → skip injection");
     }
 
     #[test]
@@ -341,20 +384,30 @@ mod tests {
     }
 
     #[test]
-    fn git_profile_egress_port_env_overridable() {
-        // FIXUS_GIT_EGRESS_PORT 覆盖默认 443(凭据代理跑非 443)。env 测试,串行。
-        std::env::set_var("FIXUS_GIT_EGRESS_PORT", "8443");
-        let g = SandboxProfile::git();
-        std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
+    fn git_profile_egress_port_overridable() {
+        // 纯 seam:port 落 allowlist。
+        let g = SandboxProfile::git_inner("github.com", 8443, None);
         assert_eq!(
             g.egress_allowlist[0].port,
             Some(8443),
-            "FIXUS_GIT_EGRESS_PORT must override default 443"
+            "explicit port lands in allowlist"
         );
-        // 非法值 → 回退默认 443
+        let g = SandboxProfile::git_inner("github.com", 443, None);
+        assert_eq!(g.egress_allowlist[0].port, Some(443), "default port 443");
+    }
+
+    #[test]
+    fn git_reads_fixus_git_egress_port_env() {
+        // env → 入参 胶水冒烟:合法值覆盖;非法值回退 443。mutex 序列化(与 CA env 测试互斥)。
+        let _g = lock_git_env();
+        std::env::set_var("FIXUS_GIT_EGRESS_PORT", "8443");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
+        assert_eq!(g.egress_allowlist[0].port, Some(8443), "valid override");
+
         std::env::set_var("FIXUS_GIT_EGRESS_PORT", "not-a-port");
         let g = SandboxProfile::git();
         std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
-        assert_eq!(g.egress_allowlist[0].port, Some(443), "invalid port → fallback 443");
+        assert_eq!(g.egress_allowlist[0].port, Some(443), "invalid -> fallback 443");
     }
 }
