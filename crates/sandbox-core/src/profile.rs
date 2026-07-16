@@ -166,7 +166,7 @@ impl SandboxProfile {
         p.rlimit = RlimitConfig::new()
             .cpu_seconds(120)
             .nofile(256)
-            .nproc(64)
+            .nproc(256)
             .fsize_mb(1024)
             .core_disabled()
             .stack_mb(16)
