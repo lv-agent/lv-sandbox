@@ -34,17 +34,40 @@ pub fn default_client_config() -> Arc<ClientConfig> {
     )
 }
 
-/// 同 [`default_client_config`],但若环境 `SANDBOX_CA_FILE` 指向一个 PEM CA 文件,
-/// 则以其根证书**替换**内置根(供内部/自签 git 上游使用;jail 注入)。
+/// 构造 jail 内 helper 使用的 ClientConfig,CA 信任来源优先级:
+/// 1. `SANDBOX_CA_PEM` —— PEM 内容直传(jail 注入通道,免 fs 依赖;自托管
+///    GitLab / 内网 CA)。git profile 从 operator 的 `FIXUS_GIT_CA_FILE` 读入并以此注入。
+/// 2. `SANDBOX_CA_FILE` —— PEM 文件路径(测试,或文件已在 jail 可读路径时)。
+/// 3. webpki-roots 内置根(默认;真 CA 上游如 github.com)。
+///
+/// 任一前序源缺失或解析失败 → 降级到下一项(绝不裸跳过校验:失败 = 不信任)。
 pub fn env_client_config() -> Arc<ClientConfig> {
+    if let Ok(pem) = std::env::var("SANDBOX_CA_PEM") {
+        if !pem.is_empty() {
+            if let Ok(cfg) = pem_config(&pem) {
+                return cfg;
+            }
+        }
+    }
     match std::env::var("SANDBOX_CA_FILE") {
         Ok(path) if !path.is_empty() => ca_file_config(&path).unwrap_or_else(|_| default_client_config()),
         _ => default_client_config(),
     }
 }
 
+/// 从 PEM 文本内容构造仅信任该 CA 的 ClientConfig(jail 通道)。
+fn pem_config(pem: &str) -> io::Result<Arc<ClientConfig>> {
+    Ok(config_from_roots(roots_from_pem(pem.as_bytes())?))
+}
+
+/// 从 PEM 文件路径构造仅信任该 CA 的 ClientConfig。
 fn ca_file_config(path: &str) -> io::Result<Arc<ClientConfig>> {
-    let pem = std::fs::read_to_string(path)?;
+    let pem = std::fs::read(path)?;
+    Ok(config_from_roots(roots_from_pem(&pem)?))
+}
+
+/// 解析 PEM 字节流为根证书集;无证书 → Err(调用方降级到下一信任源)。
+fn roots_from_pem(pem: &[u8]) -> io::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
     let mut reader = std::io::Cursor::new(pem);
     for cert in rustls_pemfile::certs(&mut reader) {
@@ -52,13 +75,17 @@ fn ca_file_config(path: &str) -> io::Result<Arc<ClientConfig>> {
         let _ = roots.add(cert);
     }
     if roots.is_empty() {
-        return Err(io::Error::other(format!("no CA certs in {path}")));
+        return Err(io::Error::other("no CA certs found in PEM"));
     }
-    Ok(Arc::new(
+    Ok(roots)
+}
+
+fn config_from_roots(roots: RootCertStore) -> Arc<ClientConfig> {
+    Arc::new(
         ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth(),
-    ))
+    )
 }
 
 /// 经 SOCKS5h-over-UDS 代理拨到 `(host, port)` 并完成 TLS 握手,返回加密流。
@@ -457,5 +484,24 @@ mod tests {
         let mut rep = [0u8; 10];
         s.read_exact(&mut rep).unwrap();
         assert_eq!(rep[1], 0x02, "IPv4-literal ATYP should be rejected");
+    }
+
+    #[test]
+    fn pem_config_accepts_real_self_signed_cert() {
+        // 真自签证书(rcgen)的 PEM → pem_config 应解析成功(仅信任该 CA)。
+        // cr-12 CA 注入:jail 侧 SANDBOX_CA_PEM 经此路径信任自签/内网上游。
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let pem = ck.cert.pem();
+        assert!(pem_config(&pem).is_ok(), "valid self-signed PEM must parse");
+    }
+
+    #[test]
+    fn pem_config_rejects_non_cert_and_empty() {
+        assert!(pem_config("not a certificate at all").is_err());
+        assert!(pem_config("").is_err());
+        // 只有私钥、无证书 → 无根 → Err(调用方降级到下一信任源,绝不裸放行)
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let key_pem = ck.signing_key.serialize_pem();
+        assert!(pem_config(&key_pem).is_err(), "key-only PEM has no CA cert");
     }
 }

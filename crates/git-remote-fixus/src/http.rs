@@ -35,7 +35,8 @@ impl FixusHttp {
         Self { proxy_sock, config }
     }
 
-    /// 用 webpki-roots 默认根证书;若环境 `SANDBOX_CA_FILE` 有值则改用该 CA。
+    /// 用 dialer::env_client_config 解析 CA 信任(优先级 SANDBOX_CA_PEM > SANDBOX_CA_FILE
+    /// > webpki-roots)。jail 侧 CA 经 git profile 以 SANDBOX_CA_PEM 注入。
     pub fn with_default_roots(proxy_sock: PathBuf) -> Self {
         Self::new(proxy_sock, dialer::env_client_config())
     }

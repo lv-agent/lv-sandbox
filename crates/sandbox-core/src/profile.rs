@@ -158,6 +158,8 @@ impl SandboxProfile {
 
     /// cr-012: git 代码-dev profile —— 开 allowlist 出口 + 放宽 rlimit/超时。
     /// egress 目标默认 github.com:443,可由 env `FIXUS_GIT_EGRESS_HOST` 覆盖(指向凭据出口代理)。
+    /// CA 信任:operator 经 `FIXUS_GIT_CA_FILE` 指向 PEM 文件 → 以 `SANDBOX_CA_PEM`
+    /// 注入 jail env(helper dialer 据此信任自签/内网 CA 上游,如自托管 GitLab)。
     pub fn git() -> Self {
         let mut p = Self::shell();
         p.name = "git".into();
@@ -175,7 +177,32 @@ impl SandboxProfile {
                 .unwrap_or_else(|_| "github.com".to_string()),
             port: Some(443),
         }];
+        // cr-12 CA 注入(见 read_git_ca_pem)。env 通道免 jail fs 依赖。
+        if let Some(pem) = read_git_ca_pem() {
+            p.env.insert("SANDBOX_CA_PEM".to_string(), pem);
+        }
         p
+    }
+}
+
+/// cr-12: 读 operator 提供的 git CA(env `FIXUS_GIT_CA_FILE` 指向 PEM 文件)→ PEM 内容。
+/// 供 [`SandboxProfile::git`] 注入 `SANDBOX_CA_PEM`(helper dialer 据此信任自签/内网 CA)。
+/// env 未设 / 路径空 / 文件不可读 / 内容空 → None(helper 回退 webpki 内置根)。
+/// 失败时 warn,便于 operator 排错(TLS 失败时能看到 CA 未加载)。
+fn read_git_ca_pem() -> Option<String> {
+    let path = std::env::var("FIXUS_GIT_CA_FILE")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    match std::fs::read_to_string(&path) {
+        Ok(pem) if !pem.trim().is_empty() => Some(pem),
+        Ok(_) => {
+            tracing::warn!(path = %path, "FIXUS_GIT_CA_FILE empty; git jail uses builtin CA roots");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(path = %path, error = %e, "FIXUS_GIT_CA_FILE unreadable; git jail uses builtin CA roots");
+            None
+        }
     }
 }
 
@@ -254,5 +281,40 @@ mod tests {
         assert!(g.rlimit.fsize_bytes > s.rlimit.fsize_bytes, "fsize must be larger");
         assert!(g.rlimit.cpu_seconds > s.rlimit.cpu_seconds, "cpu_seconds must be larger");
         assert!(g.rlimit.nofile > s.rlimit.nofile, "nofile must be larger");
+    }
+
+    // cr-12 CA 注入测试。注意:本组测试改进程级 env,须串行跑(--test-threads=1)。
+    fn scratch_ca_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("fixus-git-ca-test-{}.pem", std::process::id()))
+    }
+
+    #[test]
+    fn git_profile_injects_ca_pem_from_fixus_git_ca_file() {
+        let ca_path = scratch_ca_path();
+        let _ = std::fs::remove_file(&ca_path);
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
+        std::fs::write(&ca_path, pem).unwrap();
+        std::env::set_var("FIXUS_GIT_CA_FILE", &ca_path);
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_CA_FILE");
+        let _ = std::fs::remove_file(&ca_path);
+        assert_eq!(
+            g.env.get("SANDBOX_CA_PEM").map(String::as_str),
+            Some(pem),
+            "FIXUS_GIT_CA_FILE set → SANDBOX_CA_PEM injected verbatim"
+        );
+    }
+
+    #[test]
+    fn git_profile_no_ca_when_unset_or_unreadable() {
+        // 未设 → 不注入
+        std::env::remove_var("FIXUS_GIT_CA_FILE");
+        let g = SandboxProfile::git();
+        assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unset → no injection");
+        // 指向不存在的文件 → 跳过(不注入;helper 回退 webpki 根)
+        std::env::set_var("FIXUS_GIT_CA_FILE", "/nonexistent/fixus-git-ca.pem");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_CA_FILE");
+        assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unreadable CA → skip injection");
     }
 }
