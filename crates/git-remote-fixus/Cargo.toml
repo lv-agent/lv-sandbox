@@ -1,0 +1,21 @@
+[package]
+name = "git-remote-fixus"
+description = "cr-12 G1 git remote helper: SOCKS5h-over-UDS + TLS + git smart-HTTP for the AF_UNIX-only jail"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "git-remote-fixus"
+path = "src/main.rs"
+
+[dependencies]
+gix-transport = { version = "0.57", features = ["http-client"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+webpki-roots = "1.0"
+rustls-pemfile = "2"
+
+[dev-dependencies]
+tempfile = "3"
+rcgen = "0.14"

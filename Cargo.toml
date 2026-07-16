@@ -9,6 +9,7 @@ members = [
     "crates/sandbox-mcp",
     "crates/lv-cli",
     "crates/sandbox-broker",
+    "crates/git-remote-fixus",
     "tests/e2e",
 ]
 
