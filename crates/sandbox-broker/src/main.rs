@@ -141,10 +141,7 @@ async fn run_consumer(
                 // (Task 1 在 sandbox-core 加了 "git" profile)。fs host-path scope 仍不翻译(session jail,
                 // 比 stub 严)。effective_policy 由 fixus 经 serde_json::to_string 写成 JSON 字符串。
                 // 不返回对解析值的引用(Value 是临时量,跨闭包持有会悬垂),折成 bool 再 then_some。
-                let profile_override = rec.metadata.get("effective_policy")
-                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
-                    .is_some_and(|p| p.get("net").is_some())
-                    .then_some("git");
+                let profile_override = net_profile_override(&rec.metadata);
                 if profile_override.is_some() {
                     tracing::debug!(task = %task_id, "effective_policy net hint → git profile");
                 }
@@ -228,6 +225,21 @@ async fn produce_result(
     }
 }
 
+/// cr-12: effective_policy 声明非空 net.egress → 选 git profile。fixus 的 net 字段恒在
+/// (空 egress = deny-all),故不能只看键存在;必须 egress 非空才算真放行。fail-closed:
+/// 空/缺/malformed → None → 默认 profile(无网)。
+fn net_profile_override(metadata: &std::collections::HashMap<String, String>) -> Option<&'static str> {
+    metadata.get("effective_policy")
+        .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+        .is_some_and(|p| {
+            p.get("net")
+                .and_then(|n| n.get("egress"))
+                .and_then(|e| e.as_array())
+                .is_some_and(|a| !a.is_empty())
+        })
+        .then_some("git")
+}
+
 /// cr-087 live integration:验证 LvClient(reqwest)+ translate 对真实 lv-sandbox server。
 /// 需 server 在 :8080。`cargo test -p sandbox-broker live -- --ignored`(无 server 自动 skip)。
 #[cfg(test)]
@@ -297,5 +309,54 @@ mod live {
         assert!(r.success, "read failed: {:?}", r.error);
         let content = r.output["content"].as_str().unwrap_or("");
         assert_eq!(content, "hello live", "read-back content mismatch");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::net_profile_override;
+    use std::collections::HashMap;
+
+    fn meta_with_policy(json: &str) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert("effective_policy".to_string(), json.to_string());
+        m
+    }
+
+    /// 非空 egress → 真要网 → git profile。这是唯一放行路径。
+    #[test]
+    fn net_profile_nonempty_egress_grants_git() {
+        let m = meta_with_policy(r#"{"net":{"egress":[{"host":"github.com"}]}}"#);
+        assert_eq!(net_profile_override(&m), Some("git"));
+    }
+
+    /// THE fail-open regression case:fixus 的 NetPolicy 恒序列化 net 字段,
+    /// 空 egress = deny-all。旧逻辑只看 net 键存在 → 返回 Some("git") → 错放网。
+    /// 修复后必须返回 None。
+    #[test]
+    fn net_profile_empty_egress_denies() {
+        let m = meta_with_policy(r#"{"net":{"egress":[]}}"#);
+        assert_eq!(net_profile_override(&m), None);
+    }
+
+    /// net 键缺失(纯 fs 策略)→ None。
+    #[test]
+    fn net_profile_no_net_key_denies() {
+        let m = meta_with_policy(r#"{"fs":{}}"#);
+        assert_eq!(net_profile_override(&m), None);
+    }
+
+    /// 没有 effective_policy 元数据 → None。
+    #[test]
+    fn net_profile_missing_metadata_denies() {
+        let m: HashMap<String, String> = HashMap::new();
+        assert_eq!(net_profile_override(&m), None);
+    }
+
+    /// malformed JSON → fail-closed → None。
+    #[test]
+    fn net_profile_malformed_json_denies() {
+        let m = meta_with_policy("not json");
+        assert_eq!(net_profile_override(&m), None);
     }
 }
