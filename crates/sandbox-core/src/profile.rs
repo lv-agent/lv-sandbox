@@ -155,6 +155,28 @@ impl SandboxProfile {
             extra_writable_paths: vec![],
         }
     }
+
+    /// cr-012: git 代码-dev profile —— 开 allowlist 出口 + 放宽 rlimit/超时。
+    /// egress 目标默认 github.com:443,可由 env `FIXUS_GIT_EGRESS_HOST` 覆盖(指向凭据出口代理)。
+    pub fn git() -> Self {
+        let mut p = Self::shell();
+        p.name = "git".into();
+        p.rlimit = RlimitConfig::new()
+            .cpu_seconds(120)
+            .nofile(256)
+            .nproc(64)
+            .fsize_mb(1024)
+            .core_disabled()
+            .stack_mb(16)
+            .memlock_disabled();
+        p.default_timeout = Duration::from_secs(300);
+        p.egress_allowlist = vec![crate::egress::EgressRule {
+            host: std::env::var("FIXUS_GIT_EGRESS_HOST")
+                .unwrap_or_else(|_| "github.com".to_string()),
+            port: Some(443),
+        }];
+        p
+    }
 }
 
 /// Profile 注册表：名称 → 策略配置
@@ -171,12 +193,13 @@ impl ProfileRegistry {
         }
     }
 
-    /// 内置默认 profile 的注册表（shell/python/node）
+    /// 内置默认 profile 的注册表（shell/python/node/git）
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register(SandboxProfile::shell());
         registry.register(SandboxProfile::python());
         registry.register(SandboxProfile::node());
+        registry.register(SandboxProfile::git());
         registry
     }
 
@@ -211,12 +234,25 @@ mod tests {
         let registry = ProfileRegistry::with_defaults();
         let mut names = registry.names();
         names.sort();
-        assert_eq!(names, vec!["node", "python", "shell"]);
+        assert_eq!(names, vec!["git", "node", "python", "shell"]);
     }
 
     #[test]
     fn names_empty_registry_returns_empty() {
         let registry = ProfileRegistry::new();
         assert!(registry.names().is_empty());
+    }
+
+    #[test]
+    fn git_profile_has_egress_and_relaxed_rlimits() {
+        let g = SandboxProfile::git();
+        let s = SandboxProfile::shell();
+        assert_eq!(g.name, "git");
+        assert!(!g.egress_allowlist.is_empty(), "git profile must allow egress");
+        assert!(g.egress_allowlist.iter().any(|r| r.port == Some(443)), "must allow :443");
+        // rlimits strictly looser than shell (clone/push need CPU time, fs for repo+pack, fds)
+        assert!(g.rlimit.fsize_bytes > s.rlimit.fsize_bytes, "fsize must be larger");
+        assert!(g.rlimit.cpu_seconds > s.rlimit.cpu_seconds, "cpu_seconds must be larger");
+        assert!(g.rlimit.nofile > s.rlimit.nofile, "nofile must be larger");
     }
 }
