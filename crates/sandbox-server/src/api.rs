@@ -2254,7 +2254,7 @@ mod tests {
             .map(|v| v.as_str().unwrap().to_string())
             .collect::<Vec<_>>();
         profiles.sort();
-        assert_eq!(profiles, vec!["node", "python", "shell"]);
+        assert_eq!(profiles, vec!["git", "node", "python", "shell"]);
     }
 
     /// cr-018+#76: /health 报告安全机制就绪等级（landlock/cgroup/seccomp）

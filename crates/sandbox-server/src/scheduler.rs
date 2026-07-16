@@ -460,7 +460,7 @@ mod tests {
 
         let mut names = scheduler.profile_names();
         names.sort();
-        assert_eq!(names, vec!["node", "python", "shell"]);
+        assert_eq!(names, vec!["git", "node", "python", "shell"]);
     }
 
     #[tokio::test]
