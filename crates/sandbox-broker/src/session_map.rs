@@ -20,10 +20,15 @@ impl SessionMap {
     }
 
     /// 返回 task_id 对应的 session_id;不存在则调 http.create_session 建并记。
+    ///
+    /// `profile_override`:本 task 专用 profile;`None` 用 SessionMap 默认 profile。
+    /// cr-12:fixus 声明 net 能力时,translate 传 `Some("git")` 以选 git egress profile。
+    /// 仅在首次为某 task_id 建会话时生效(后续复用既有 session,不再改 profile)。
     pub async fn get_or_create(
         &self,
         http: &Arc<dyn SandboxHttp>,
         task_id: &str,
+        profile_override: Option<&str>,
     ) -> Result<String, BridgeError> {
         // 持锁跨 create_session:避免并发首见同 task_id 时双建 session(TOCTOU —— 两个
         // tool_invoked 都 miss 缓存、各建一个 session,后写覆盖前写 → work_dir 连续性断裂 +
@@ -32,9 +37,10 @@ impl SessionMap {
         if let Some(sid) = map.get(task_id).cloned() {
             return Ok(sid);
         }
+        let profile = profile_override.unwrap_or(&self.profile);
         let mut metadata = HashMap::new();
         metadata.insert("fixus_task_id".to_string(), task_id.to_string());
-        let sid = http.create_session(&self.profile, metadata, self.timeout_secs).await?;
+        let sid = http.create_session(profile, metadata, self.timeout_secs).await?;
         map.insert(task_id.to_string(), sid.clone());
         Ok(sid)
     }
@@ -55,12 +61,15 @@ mod tests {
     struct CountingMock {
         creates: AtomicUsize,
         first_id: String,
+        // 每次 create_session 收到的 profile 参数(按调用顺序)。
+        profiles: Mutex<Vec<String>>,
     }
     #[async_trait::async_trait]
     impl SandboxHttp for CountingMock {
-        async fn create_session(&self, _p: &str, _m: HashMap<String, String>, _t: u64)
+        async fn create_session(&self, p: &str, _m: HashMap<String, String>, _t: u64)
             -> Result<String, BridgeError> {
             self.creates.fetch_add(1, Ordering::SeqCst);
+            self.profiles.lock().await.push(p.to_string());
             Ok(self.first_id.clone())
         }
         async fn exec(&self, _: &str, _: Vec<String>, _: Option<String>, _: Option<String>) -> Result<crate::lv_client::JobResult, BridgeError> { unreachable!() }
@@ -73,7 +82,11 @@ mod tests {
     }
 
     fn mock() -> Arc<CountingMock> {
-        Arc::new(CountingMock { creates: AtomicUsize::new(0), first_id: "sess-1".into() })
+        Arc::new(CountingMock {
+            creates: AtomicUsize::new(0),
+            first_id: "sess-1".into(),
+            profiles: Mutex::new(vec![]),
+        })
     }
 
     #[tokio::test]
@@ -81,8 +94,8 @@ mod tests {
         let m = mock();
         let sm = SessionMap::new("shell".into(), 3600);
         let http: Arc<dyn SandboxHttp> = m.clone();
-        let a = sm.get_or_create(&http, "task-A").await.unwrap();
-        let b = sm.get_or_create(&http, "task-A").await.unwrap();
+        let a = sm.get_or_create(&http, "task-A", None).await.unwrap();
+        let b = sm.get_or_create(&http, "task-A", None).await.unwrap();
         assert_eq!(a, "sess-1");
         assert_eq!(a, b, "same task reuses same session");
         assert_eq!(m.creates.load(Ordering::SeqCst), 1, "create_session called exactly once");
@@ -93,8 +106,8 @@ mod tests {
         let m = mock();
         let sm = SessionMap::new("shell".into(), 3600);
         let http: Arc<dyn SandboxHttp> = m.clone();
-        sm.get_or_create(&http, "task-A").await.unwrap();
-        sm.get_or_create(&http, "task-B").await.unwrap();
+        sm.get_or_create(&http, "task-A", None).await.unwrap();
+        sm.get_or_create(&http, "task-B", None).await.unwrap();
         assert_eq!(m.creates.load(Ordering::SeqCst), 2);
     }
 
@@ -103,9 +116,26 @@ mod tests {
         let m = mock();
         let sm = SessionMap::new("shell".into(), 3600);
         let http: Arc<dyn SandboxHttp> = m.clone();
-        sm.get_or_create(&http, "task-A").await.unwrap();
+        sm.get_or_create(&http, "task-A", None).await.unwrap();
         sm.invalidate("task-A").await;
-        sm.get_or_create(&http, "task-A").await.unwrap();
+        sm.get_or_create(&http, "task-A", None).await.unwrap();
         assert_eq!(m.creates.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn per_task_profile_override() {
+        let m = mock();
+        let sm = SessionMap::new("shell".into(), 3600);
+        let http: Arc<dyn SandboxHttp> = m.clone();
+        // task-A:override → "git"(net hint 翻译路径)
+        sm.get_or_create(&http, "task-A", Some("git")).await.unwrap();
+        // task-B:无 override → SessionMap 默认 "shell"
+        sm.get_or_create(&http, "task-B", None).await.unwrap();
+        // 同 task 再查复用(不触发新 create)
+        sm.get_or_create(&http, "task-A", Some("git")).await.unwrap();
+        let profiles = m.profiles.lock().await.clone();
+        assert_eq!(profiles, vec!["git".to_string(), "shell".to_string()],
+            "per-task profile applied; reuse did not create a new session");
+        assert_eq!(m.creates.load(Ordering::SeqCst), 2, "one create per task");
     }
 }

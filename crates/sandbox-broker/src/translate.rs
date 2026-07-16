@@ -39,8 +39,9 @@ pub async fn execute(
     task_id: &str,
     http: &Arc<dyn SandboxHttp>,
     sessions: &SessionMap,
+    profile_override: Option<&str>,
 ) -> Result<ToolOutput, BridgeError> {
-    let sid = sessions.get_or_create(http, task_id).await?;
+    let sid = sessions.get_or_create(http, task_id, profile_override).await?;
     let to = if timeout_secs > 0 { Some(format!("{}s", timeout_secs)) } else { None };
     match tool_name {
         "fixus_bash" => {
@@ -188,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn bash_renders_argv_and_maps_exit() {
         let (m, http, sm) = setup("Completed", 0);
-        let r = execute("fixus_bash", &serde_json::json!({"command": "echo hi"}), 0, "t1", &http, &sm).await.unwrap();
+        let r = execute("fixus_bash", &serde_json::json!({"command": "echo hi"}), 0, "t1", &http, &sm, None).await.unwrap();
         assert_eq!(*m.last_argv.lock().await, vec!["bash", "-c", "echo hi"]);
         assert!(r.success);
         assert_eq!(r.output["exit_code"], 0);
@@ -197,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn bash_nonzero_exit_is_failure() {
         let (_m, http, sm) = setup("Completed", 2);
-        let r = execute("fixus_bash", &serde_json::json!({"code": "false"}), 0, "t1", &http, &sm).await.unwrap();
+        let r = execute("fixus_bash", &serde_json::json!({"code": "false"}), 0, "t1", &http, &sm, None).await.unwrap();
         assert!(!r.success);
         assert!(r.error.as_deref().unwrap().contains("exit code 2"));
     }
@@ -207,7 +208,7 @@ mod tests {
         // filter 含 shell 元字符:必须是独立 argv 元素,不经 shell
         let (m, http, sm) = setup("Completed", 0);
         let evil = "$(touch /tmp/pwned); rm -rf /";
-        execute("fixus_jq", &serde_json::json!({"filter": evil, "file": "a.json"}), 0, "t1", &http, &sm).await.unwrap();
+        execute("fixus_jq", &serde_json::json!({"filter": evil, "file": "a.json"}), 0, "t1", &http, &sm, None).await.unwrap();
         let argv = m.last_argv.lock().await.clone();
         assert_eq!(argv, vec!["jq", "-r", evil, "a.json"], "filter is exactly one argv element");
         assert_eq!(argv.len(), 4);
@@ -216,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn rg_renders_argv() {
         let (m, http, sm) = setup("Completed", 0);
-        execute("fixus_rg", &serde_json::json!({"pattern": "TODO", "path": "src"}), 0, "t1", &http, &sm).await.unwrap();
+        execute("fixus_rg", &serde_json::json!({"pattern": "TODO", "path": "src"}), 0, "t1", &http, &sm, None).await.unwrap();
         assert_eq!(*m.last_argv.lock().await, vec!["rg", "TODO", "src"]);
     }
 
@@ -228,7 +229,7 @@ mod tests {
         });
         let http: Arc<dyn SandboxHttp> = m.clone();
         let sm = SessionMap::new("shell".into(), 3600);
-        let r = execute("fixus_bash", &serde_json::json!({"command": "sleep 999"}), 0, "t1", &http, &sm).await.unwrap();
+        let r = execute("fixus_bash", &serde_json::json!({"command": "sleep 999"}), 0, "t1", &http, &sm, None).await.unwrap();
         assert!(!r.success);
         assert_eq!(r.error.as_deref(), Some("timed out"));
     }
@@ -236,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_errors() {
         let (_m, http, sm) = setup("Completed", 0);
-        let r = execute("fixus_nope", &serde_json::json!({}), 0, "t1", &http, &sm).await;
+        let r = execute("fixus_nope", &serde_json::json!({}), 0, "t1", &http, &sm, None).await;
         assert!(matches!(r, Err(BridgeError::UnknownTool(_))));
     }
 
@@ -276,10 +277,10 @@ mod tests {
     #[tokio::test]
     async fn read_full_then_offset_limit() {
         let (_m, http, sm) = file_mock(vec![("f", "a\nb\nc\nd\ne")]);
-        let r = execute("fixus_read", &serde_json::json!({"file_path": "f"}), 0, "t", &http, &sm).await.unwrap();
+        let r = execute("fixus_read", &serde_json::json!({"file_path": "f"}), 0, "t", &http, &sm, None).await.unwrap();
         assert_eq!(r.output["content"], "a\nb\nc\nd\ne");
         assert_eq!(r.output["total_lines"], 5);
-        let r2 = execute("fixus_read", &serde_json::json!({"file_path": "f", "offset": 1, "limit": 2}), 0, "t", &http, &sm).await.unwrap();
+        let r2 = execute("fixus_read", &serde_json::json!({"file_path": "f", "offset": 1, "limit": 2}), 0, "t", &http, &sm, None).await.unwrap();
         assert_eq!(r2.output["content"], "b\nc");
         assert_eq!(r2.output["lines_returned"], 2);
     }
@@ -287,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn write_puts_bytes() {
         let (m, http, sm) = file_mock(vec![]);
-        let r = execute("fixus_write", &serde_json::json!({"file_path": "out", "content": "hello"}), 0, "t", &http, &sm).await.unwrap();
+        let r = execute("fixus_write", &serde_json::json!({"file_path": "out", "content": "hello"}), 0, "t", &http, &sm, None).await.unwrap();
         assert!(r.success);
         assert_eq!(r.output["bytes_written"], 5);
         assert_eq!(m.files.lock().await.get("out").unwrap(), b"hello");
@@ -296,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn edit_replaces_once() {
         let (m, http, sm) = file_mock(vec![("f", "hello world")]);
-        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "world", "new_string": "rust"}), 0, "t", &http, &sm).await.unwrap();
+        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "world", "new_string": "rust"}), 0, "t", &http, &sm, None).await.unwrap();
         assert!(r.success);
         assert_eq!(m.files.lock().await.get("f").unwrap(), b"hello rust");
     }
@@ -304,7 +305,7 @@ mod tests {
     #[tokio::test]
     async fn edit_missing_old_string_fails() {
         let (_m, http, sm) = file_mock(vec![("f", "hello")]);
-        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "nope", "new_string": "x"}), 0, "t", &http, &sm).await.unwrap();
+        let r = execute("fixus_edit", &serde_json::json!({"file_path": "f", "old_string": "nope", "new_string": "x"}), 0, "t", &http, &sm, None).await.unwrap();
         assert!(!r.success);
         assert!(r.error.unwrap().contains("not found"));
     }
@@ -312,9 +313,9 @@ mod tests {
     #[tokio::test]
     async fn glob_and_grep_shape() {
         let (_m, http, sm) = file_mock(vec![]);
-        let g = execute("fixus_glob", &serde_json::json!({"pattern": "*.rs"}), 0, "t", &http, &sm).await.unwrap();
+        let g = execute("fixus_glob", &serde_json::json!({"pattern": "*.rs"}), 0, "t", &http, &sm, None).await.unwrap();
         assert_eq!(g.output["count"], 2);
-        let gr = execute("fixus_grep", &serde_json::json!({"pattern": "TODO"}), 0, "t", &http, &sm).await.unwrap();
+        let gr = execute("fixus_grep", &serde_json::json!({"pattern": "TODO"}), 0, "t", &http, &sm, None).await.unwrap();
         assert_eq!(gr.output["count"], 1);
         assert!(gr.output["matches"].as_str().unwrap().contains("TODO"));
     }

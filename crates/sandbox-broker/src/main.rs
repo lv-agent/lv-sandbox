@@ -137,9 +137,16 @@ async fn run_consumer(
                 let shard_id = rec.shard_id;
                 let seq = rec.seq;
 
-                // cr-087 §8:effective_policy 的 fs host 路径 scope 不翻译(session jail,比 stub 严)。记 warn 供观测。
-                if rec.metadata.contains_key("effective_policy") {
-                    tracing::warn!(task = %task_id, "effective_policy present but fs host-path scopes not translated (session-isolated)");
+                // cr-12:fixus 的 effective_policy JSON 声明 net 能力时,本 task 选 git egress profile
+                // (Task 1 在 sandbox-core 加了 "git" profile)。fs host-path scope 仍不翻译(session jail,
+                // 比 stub 严)。effective_policy 由 fixus 经 serde_json::to_string 写成 JSON 字符串。
+                // 不返回对解析值的引用(Value 是临时量,跨闭包持有会悬垂),折成 bool 再 then_some。
+                let profile_override = rec.metadata.get("effective_policy")
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                    .is_some_and(|p| p.get("net").is_some())
+                    .then_some("git");
+                if profile_override.is_some() {
+                    tracing::debug!(task = %task_id, "effective_policy net hint → git profile");
                 }
 
                 // 幂等命中:直接产缓存结果 + commit
@@ -169,6 +176,7 @@ async fn run_consumer(
                     let t0 = std::time::Instant::now();
                     let (success, output, error) = match translate::execute(
                         &tool_name, &input, timeout_secs, &session_id_src, &http_clone, &sessions_clone,
+                        profile_override,
                     ).await {
                         Ok(o) => (o.success, o.output, o.error),
                         Err(e) => (false, serde_json::Value::Null, Some(format!("{}", e))),
@@ -262,7 +270,7 @@ mod live {
         let r = translate::execute(
             "fixus_bash",
             &serde_json::json!({"command": "echo cr087live"}),
-            10, "live-test-task", &http, &sessions,
+            10, "live-test-task", &http, &sessions, None,
         ).await.expect("bash exec should succeed against live server");
         assert!(r.success, "bash should exit 0; error={:?}", r.error);
         let stdout = r.output["stdout"].as_str().unwrap_or("");
@@ -281,11 +289,11 @@ mod live {
         let task = "live-rw-task";
         // write
         let w = translate::execute("fixus_write",
-            &serde_json::json!({"file_path": "cr087.txt", "content": "hello live"}), 0, task, &http, &sessions).await.unwrap();
+            &serde_json::json!({"file_path": "cr087.txt", "content": "hello live"}), 0, task, &http, &sessions, None).await.unwrap();
         assert!(w.success, "write failed: {:?}", w.error);
         // read back (same task → same session → sees the file)
         let r = translate::execute("fixus_read",
-            &serde_json::json!({"file_path": "cr087.txt"}), 0, task, &http, &sessions).await.unwrap();
+            &serde_json::json!({"file_path": "cr087.txt"}), 0, task, &http, &sessions, None).await.unwrap();
         assert!(r.success, "read failed: {:?}", r.error);
         let content = r.output["content"].as_str().unwrap_or("");
         assert_eq!(content, "hello live", "read-back content mismatch");
