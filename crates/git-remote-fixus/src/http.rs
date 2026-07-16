@@ -35,9 +35,9 @@ impl FixusHttp {
         Self { proxy_sock, config }
     }
 
-    /// 用 webpki-roots 默认根证书。
+    /// 用 webpki-roots 默认根证书;若环境 `SANDBOX_CA_FILE` 有值则改用该 CA。
     pub fn with_default_roots(proxy_sock: PathBuf) -> Self {
-        Self::new(proxy_sock, dialer::default_client_config())
+        Self::new(proxy_sock, dialer::env_client_config())
     }
 
     /// 测试用:自签场景传跳过校验的 config。

@@ -34,9 +34,37 @@ pub fn default_client_config() -> Arc<ClientConfig> {
     )
 }
 
+/// 同 [`default_client_config`],但若环境 `SANDBOX_CA_FILE` 指向一个 PEM CA 文件,
+/// 则以其根证书**替换**内置根(供内部/自签 git 上游使用;jail 注入)。
+pub fn env_client_config() -> Arc<ClientConfig> {
+    match std::env::var("SANDBOX_CA_FILE") {
+        Ok(path) if !path.is_empty() => ca_file_config(&path).unwrap_or_else(|_| default_client_config()),
+        _ => default_client_config(),
+    }
+}
+
+fn ca_file_config(path: &str) -> io::Result<Arc<ClientConfig>> {
+    let pem = std::fs::read_to_string(path)?;
+    let mut roots = RootCertStore::empty();
+    let mut reader = std::io::Cursor::new(pem);
+    for cert in rustls_pemfile::certs(&mut reader) {
+        let cert = cert.map_err(|e| io::Error::other(e.to_string()))?;
+        let _ = roots.add(cert);
+    }
+    if roots.is_empty() {
+        return Err(io::Error::other(format!("no CA certs in {path}")));
+    }
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
+}
+
 /// 经 SOCKS5h-over-UDS 代理拨到 `(host, port)` 并完成 TLS 握手,返回加密流。
 ///
 /// 使用生产默认根证书(webpki-roots)。测试或自签场景请用 [`connect_with_config`]。
+#[allow(dead_code)] // 公共便利入口(被 http.rs 经 connect_with_config 间接使用)
 pub fn connect(proxy_sock: &Path, host: &str, port: u16) -> io::Result<TlsStream> {
     connect_with_config(proxy_sock, host, port, default_client_config())
 }
