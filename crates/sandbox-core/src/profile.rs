@@ -187,6 +187,10 @@ impl SandboxProfile {
         if let Some(pem) = read_git_ca_pem() {
             p.env.insert("SANDBOX_CA_PEM".to_string(), pem);
         }
+        // cr-12: git 以 O_RDWR 打开 /dev/null(plumbing / 默认空对象),而 landlock
+        // device_paths() 只授 /dev/null ReadOnly → 拒写 → "could not open '/dev/null'
+        // for reading and writing"。写 /dev/null 是丢弃,零安全风险,显式补 ReadWrite。
+        p.extra_writable_paths.push(PathBuf::from("/dev/null"));
         p
     }
 }
@@ -322,6 +326,18 @@ mod tests {
         let g = SandboxProfile::git();
         std::env::remove_var("FIXUS_GIT_CA_FILE");
         assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unreadable CA → skip injection");
+    }
+
+    #[test]
+    fn git_profile_grants_dev_null_writable() {
+        // cr-12: git O_RDWR 打开 /dev/null,需 ReadWrite(写 /dev/null = 丢弃,无害)。
+        let g = SandboxProfile::git();
+        assert!(
+            g.extra_writable_paths
+                .iter()
+                .any(|p| p == std::path::Path::new("/dev/null")),
+            "git profile must grant /dev/null ReadWrite (git opens it O_RDWR; device_paths only grants ReadOnly)"
+        );
     }
 
     #[test]
