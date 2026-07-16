@@ -283,15 +283,16 @@ pub fn push_refs(
 
     // 2) 请求体:报告状态需求 + 各 ref 更新 + flush + 包
     let mut body = Vec::new();
-    body.extend_from_slice(&pkt(
-        b"report-status agent=git-remote-fixus/0.1\n",
-    ));
-    body.extend_from_slice(FLUSH);
     const ZERO: &str = "0000000000000000000000000000000000000000";
-    for u in updates {
+    for (i, u) in updates.iter().enumerate() {
         let old = if u.old.is_empty() { ZERO } else { u.old.as_str() };
         let new = if u.new.is_empty() { ZERO } else { u.new.as_str() };
-        let line = format!("{old} {new} {}\n", u.dst);
+        // receive-pack:客户端能力挂在首条 ref 行 NUL 之后(非独立 pkt-line)
+        let line = if i == 0 {
+            format!("{old} {new} {}\0report-status agent=git-remote-fixus/0.1\n", u.dst)
+        } else {
+            format!("{old} {new} {}\n", u.dst)
+        };
         body.extend_from_slice(&pkt(line.as_bytes()));
     }
     body.extend_from_slice(FLUSH);
