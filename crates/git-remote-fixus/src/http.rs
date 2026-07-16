@@ -506,6 +506,14 @@ impl Drop for PostBody {
 
 /// 把 `https://host[:port]/path?q` 拆成 (host_with_port, path_with_query)。
 fn split_url(url: &str) -> io::Result<(String, String)> {
+    // host/path 会被插值进请求行 + Host 头,拒绝裸 CR/LF 以防 header 注入。
+    // (低风险:git 自身会拒此类 URL,%-编码的字节按字面发送,此处只是硬化。)
+    if url.contains('\r') || url.contains('\n') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "URL must not contain CR or LF",
+        ));
+    }
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -820,6 +828,18 @@ mod tests {
             }
             thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn split_url_rejects_crlf() {
+        // CR/LF in the URL could inject into the request line / Host header.
+        assert!(split_url("https://host.example/path\r\nX-Inject: bad").is_err());
+        assert!(split_url("https://host.example\n/path").is_err());
+        assert!(split_url("https://host.example\r/path").is_err());
+        // 正常 URL 不受影响
+        let (h, p) = split_url("https://host.example:8443/repo.git/info/refs?x=1").unwrap();
+        assert_eq!(h, "host.example:8443");
+        assert_eq!(p, "/repo.git/info/refs?x=1");
     }
 
     #[test]

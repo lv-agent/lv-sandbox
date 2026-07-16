@@ -24,13 +24,21 @@ type HttpErr = gix_transport::client::blocking_io::http::Error;
 
 const FLUSH: &[u8] = b"0000";
 
-/// pkt-line 编码:`<4-hex-len><data>`(len 含 4 字节长度自身,最大 65520 数据)。
-fn pkt(data: &[u8]) -> Vec<u8> {
+/// pkt-line 编码:`<4-hex-len><data>`(len 含 4 字节长度自身)。
+///
+/// 协议总长上限 65520(0xfff0);65521..65535 为保留值。超过上限返回 Err
+/// (非 panic):所有调用方都在返回 `io::Result` 的函数内,用 `?` 传播。
+fn pkt(data: &[u8]) -> io::Result<Vec<u8>> {
+    const PKT_MAX_TOTAL: usize = 65520;
     let total = 4 + data.len();
-    assert!(total <= 0xffff, "pkt-line too large");
+    if total > PKT_MAX_TOTAL {
+        return Err(io::Error::other(format!(
+            "pkt-line too large: {total} bytes (max {PKT_MAX_TOTAL})"
+        )));
+    }
     let mut out = format!("{total:04x}").into_bytes();
     out.extend_from_slice(data);
-    out
+    Ok(out)
 }
 
 /// pkt-line 读取:从 BufRead 读一条。返回 None=流结束。
@@ -70,6 +78,9 @@ impl<R: BufRead> PktReader<R> {
             0 => Ok(Some(Pkt::Flush)),
             1 => Ok(Some(Pkt::Delim)),
             n if n < 4 => Err(io::Error::other("pkt-line length < 4")),
+            n if n > 65520 => Err(io::Error::other(format!(
+                "pkt-line length {n} exceeds max 65520 (65521..65535 reserved)"
+            ))),
             n => {
                 let mut buf = vec![0u8; (n - 4) as usize];
                 self.r.read_exact(&mut buf)?;
@@ -186,10 +197,10 @@ pub fn fetch_pack(http: &mut FixusHttp, base_url: &str, wants: &[String]) -> io:
         } else {
             format!("want {w}\n")
         };
-        body.extend_from_slice(&pkt(line.as_bytes()));
+        body.extend_from_slice(&pkt(line.as_bytes())?);
     }
     body.extend_from_slice(FLUSH); // 想要列表结束
-    body.extend_from_slice(&pkt(b"done\n"));
+    body.extend_from_slice(&pkt(b"done\n")?);
     resp.post_body.write_all(&body)?;
     drop(resp.post_body); // 触发发送
     drop(resp.headers);
@@ -293,7 +304,7 @@ pub fn push_refs(
         } else {
             format!("{old} {new} {}\n", u.dst)
         };
-        body.extend_from_slice(&pkt(line.as_bytes()));
+        body.extend_from_slice(&pkt(line.as_bytes())?);
     }
     body.extend_from_slice(FLUSH);
     // 包(可能为空 = 仅删 ref / 已是最新)
@@ -400,10 +411,21 @@ mod tests {
     #[test]
     fn pkt_roundtrip() {
         // 4 字节长度含自身
-        let enc = pkt(b"done\n");
+        let enc = pkt(b"done\n").unwrap();
         assert_eq!(&enc, b"0009done\n");
-        let enc = pkt(b"want");
+        let enc = pkt(b"want").unwrap();
         assert_eq!(&enc, b"0008want");
+    }
+
+    #[test]
+    fn pkt_rejects_oversized() {
+        // 协议上限:总长 65520(含 4 字节长度前缀);65521..65535 保留。
+        // 刚好上限(65516 字节数据)应成功。
+        let ok_data = vec![b'x'; 65520 - 4];
+        assert!(pkt(&ok_data).is_ok());
+        // 超过上限(65517 字节数据 → 总长 65521)应返回 Err,而非 panic。
+        let big_data = vec![b'x'; 65520 - 4 + 1];
+        assert!(pkt(&big_data).is_err());
     }
 
     #[test]

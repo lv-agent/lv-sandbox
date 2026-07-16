@@ -107,7 +107,8 @@ pub fn connect_with_config(
     req.extend_from_slice(&port.to_be_bytes());
     sock.write_all(&req)?;
 
-    // 期待 10 字节 reply;REP 在第二字节,0x00=成功,其余=失败
+    // 期待 10 字节 reply;REP 在第二字节,0x00=成功,其余=失败。
+    // 假设 IPv4 ATYP 应答:沙箱代理固定回 [05 00 00 01 <4 BND.ADDR> <2 BND.PORT>] = 10 字节。
     let mut rep = [0u8; 10];
     sock.read_exact(&mut rep)?;
     if rep[0] != 0x05 {

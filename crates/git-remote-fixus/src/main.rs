@@ -100,14 +100,19 @@ fn run() -> io::Result<()> {
                         push_unique(&mut wants, sha);
                     }
                 }
-                match smart::fetch_pack(&mut http, &base, &wants) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // 写 stderr 让 git 报错;仍需空行收尾 stdout
-                        eprintln!("git-remote-fixus fetch error: {e}");
-                    }
+                if let Err(e) = smart::fetch_pack(&mut http, &base, &wants) {
+                    // fetch 失败:写 stderr,但**不**写空行完成信号 —— 直接让 run()
+                    // 返回 Err、main 非零退出。git 把 helper 退出非零(及批次中途 EOF)
+                    // 判定为 fetch 失败,从而把上面的 stderr 消息 surface 出来。
+                    // (若照旧写空行 + exit 0,git 会误读成 fetch 成功,稍后才以
+                    // 令人困惑的 "missing object" 报错。)
+                    // 注:e2e 集成测试(tests/e2e_clone.rs)仅覆盖成功路径;失败路径
+                    // 需畸形 upload-pack 上游,留作后续。
+                    eprintln!("git-remote-fixus fetch error: {e}");
+                    let _ = out.flush();
+                    return Err(e);
                 }
-                writeln!(out)?; // fetch 批次完成信号
+                writeln!(out)?; // fetch 批次成功完成信号
                 out.flush()?;
             }
             other if other.starts_with("push ") => {
