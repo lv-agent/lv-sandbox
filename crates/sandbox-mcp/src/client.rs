@@ -22,7 +22,17 @@ impl SandboxHttpClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         Ok(Self {
             base_url: base_url.into(),
-            client: reqwest::Client::builder().build()?,
+            // cr-024: disable keep-alive connection pooling. submit() does a
+            // POST then immediately polls GET; with the default pool, the GET
+            // can reuse a connection the server has already closed, surfacing
+            // as `error sending request ... connection closed before message
+            // completed`. pool_max_idle_per_host(0) makes every request open a
+            // fresh connection — a negligible cost for the short-lived REST
+            // calls here, but it removes the reuse race entirely (was an
+            // intermittent CI flake in client::tests::submit_*).
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()?,
             api_key: None,
         })
     }
@@ -319,6 +329,53 @@ mod tests {
         let client = SandboxHttpClient::new(server.uri()).unwrap();
         let result = client.submit(&run_params(None)).await;
         assert!(result.is_err(), "5xx should return error");
+    }
+
+    /// Regression: `submit()` must be reliable across repeated calls on a single
+    /// client. Previously, hyper keep-alive connection-pool reuse could race
+    /// against the server closing idle connections between the POST and the
+    /// polling GET, surfacing as `error sending request ... connection closed
+    /// before message completed`. This loop amplifies that race so a regression
+    /// flakes quickly instead of once every ~30 CI runs.
+    #[tokio::test]
+    async fn submit_is_reliable_across_repeated_calls() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/jobs"))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "job_id": "repeat",
+                    "status": "Running",
+                })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs/repeat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "job_id": "repeat",
+                "status": "Completed",
+                "exit_code": 0,
+                "signal": null,
+                "stdout": "",
+                "stderr": "",
+                "duration_ms": 1,
+                "timed_out": false,
+            })))
+            .mount(&server)
+            .await;
+
+        let client = SandboxHttpClient::new(server.uri()).unwrap();
+        // 30 iterations share one client (= one connection pool). On the
+        // unfixed code this triggers the keep-alive race within a few runs.
+        for i in 0..30 {
+            let result = client
+                .submit(&run_params(Some("repeat")))
+                .await
+                .unwrap_or_else(|e| panic!("iteration {i} failed: {e:?}"));
+            assert_eq!(result.status, "Completed", "iteration {i}");
+            assert_eq!(result.job_id, "repeat", "iteration {i}");
+        }
     }
 
     /// cr-023: with_api_key 后请求带 `Authorization: Bearer <key>`。
