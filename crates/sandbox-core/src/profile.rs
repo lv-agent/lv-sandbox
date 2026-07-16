@@ -175,7 +175,13 @@ impl SandboxProfile {
         p.egress_allowlist = vec![crate::egress::EgressRule {
             host: std::env::var("FIXUS_GIT_EGRESS_HOST")
                 .unwrap_or_else(|_| "github.com".to_string()),
-            port: Some(443),
+            // 默认 443;operator 可经 FIXUS_GIT_EGRESS_PORT 覆盖(凭据出口代理跑非 443 时)。
+            port: Some(
+                std::env::var("FIXUS_GIT_EGRESS_PORT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(443),
+            ),
         }];
         // cr-12 CA 注入(见 read_git_ca_pem)。env 通道免 jail fs 依赖。
         if let Some(pem) = read_git_ca_pem() {
@@ -316,5 +322,23 @@ mod tests {
         let g = SandboxProfile::git();
         std::env::remove_var("FIXUS_GIT_CA_FILE");
         assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "unreadable CA → skip injection");
+    }
+
+    #[test]
+    fn git_profile_egress_port_env_overridable() {
+        // FIXUS_GIT_EGRESS_PORT 覆盖默认 443(凭据代理跑非 443)。env 测试,串行。
+        std::env::set_var("FIXUS_GIT_EGRESS_PORT", "8443");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
+        assert_eq!(
+            g.egress_allowlist[0].port,
+            Some(8443),
+            "FIXUS_GIT_EGRESS_PORT must override default 443"
+        );
+        // 非法值 → 回退默认 443
+        std::env::set_var("FIXUS_GIT_EGRESS_PORT", "not-a-port");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
+        assert_eq!(g.egress_allowlist[0].port, Some(443), "invalid port → fallback 443");
     }
 }
