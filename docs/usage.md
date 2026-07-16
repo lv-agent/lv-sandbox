@@ -346,6 +346,95 @@ profiles:
   not `a.b.pypi.org`).
 - `dry_run: true` returns the profile's `egress_allowlist` for previewing.
 
+### Git access (git profile, CR-12)
+
+The built-in **`git`** profile lets a sandboxed task run `git clone` / `commit` /
+`push` against a remote. Select it like any other profile:
+
+```bash
+# one-shot job
+curl -X POST http://127.0.0.1:8080/api/v1/jobs -H 'content-type: application/json' -d '{
+  "job_id":"g1",
+  "argv":["/usr/bin/git","clone","fixus::https://github.com/org/repo.git"],
+  "profile_name":"git",
+  "timeout":"300s"
+}'
+
+# or a session
+s = lv.sessions.create(profile="git")
+```
+
+It is built on the [`shell`](#profiles) profile and opts into the existing
+[controlled egress](#controlled-egress-egress-allowlist) path, with three
+additions (defined in `crates/sandbox-core/src/profile.rs` →
+`SandboxProfile::git()`):
+
+1. **Egress allowlist** — a single rule pointing at the git / credential-exit
+   endpoint. Host/port come from env vars read at profile construction, so set
+   them on the **sandbox-server process** before startup:
+
+   | env var | default | notes |
+   |---|---|---|
+   | `FIXUS_GIT_EGRESS_HOST` | `github.com` | allowlisted destination (typically your credential-exit proxy) |
+   | `FIXUS_GIT_EGRESS_PORT` | `443` | parse failure falls back to `443` |
+   | `FIXUS_GIT_CA_FILE` | *(unset)* | path to a PEM file; its contents are injected into the jail as `SANDBOX_CA_PEM` so the in-jail helper trusts a self-signed / internal-CA upstream (e.g. self-hosted GitLab). Unset/unreadable/empty → no injection → helper falls back to webpki roots (logged at `warn`). |
+
+   Zero egress for every other profile is unchanged — the `git` profile
+   explicitly allows the git / credential-exit endpoint.
+
+2. **Relaxed rlimits / timeout** for clone/push: `cpu_seconds 120`, `nofile 256`,
+   `nproc 256`, `fsize_mb 1024`, `default_timeout 300s`.
+
+3. **`/dev/null` granted ReadWrite** — git opens `/dev/null` `O_RDWR`, but the
+   landlock device set only grants it `ReadOnly`, which makes git fail with
+   `could not open '/dev/null' for reading and writing`. The profile adds an
+   explicit writable grant (writing `/dev/null` is a discard, zero risk).
+
+#### Routing git over the egress proxy
+
+git itself never opens a raw INET socket — seccomp still kills
+`socket(domain != AF_UNIX)`. Instead a **`git-remote-fixus`** helper binary
+(`crates/git-remote-fixus`, installed on `PATH` in the jail — conventionally
+`/usr/bin/git-remote-fixus`, so git's remote-helper lookup finds it) implements
+the `fixus::https://<host>/<path>` remote URL scheme. It dials the upstream
+through the per-job SOCKS5h-over-UDS proxy (socket path from `SANDBOX_PROXY_SOCK`,
+injected per job by cr-019) using rustls TLS, and speaks git smart-HTTP
+(fetch + push). git's entire network surface is confined to the allowlisted UDS
+proxy.
+
+```bash
+# inside the sandbox (profile: git)
+git clone fixus::https://github.com/org/repo.git
+git -C repo commit -am "wip"
+git -C repo push origin HEAD
+```
+
+CA precedence in the helper dialer: `SANDBOX_CA_PEM` > `SANDBOX_CA_FILE` >
+webpki built-in roots. Any source that is missing or unparseable falls through
+to the next — the dialer never skips certificate verification.
+
+#### Credentials: sentinel + exit-proxy swap
+
+Credentials enter the jail but are **fake / sentinel** values (non-secret
+placeholders). git runs its standard credential flow (credential helper / git
+config) against the sentinel. The egress allowlist points at a
+**credential-exit proxy** *outside* the jail; that proxy recognizes the sentinel,
+swaps it for the real token, and forwards to `github.com:443`. The real token
+exists **only** in the proxy process.
+
+The swap-proxy body and the sentinel scheme are **out of CR-12 scope**
+(operator-implemented); CR-12 defines only the jail-side allowlist shape and
+guarantees the standard git credential flow runs against it. See
+[security.md · Git egress & the sentinel credential model](security.md#git-egress--the-sentinel-credential-model-cr-12)
+and [network-isolation.md · Git over the egress proxy](network-isolation.md#git-over-the-egress-proxy-cr-12).
+
+> **Gotcha — internal-CA TLS.** rustls rejects a CA certificate served as a leaf
+> (`InvalidCertificate(CaUsedAsEndEntity)`). For a self-hosted GitLab / internal
+> CA, put a proper `CA:TRUE` root + `CA:FALSE` leaf (with SAN) chain in the PEM
+> pointed at by `FIXUS_GIT_CA_FILE`. OpenSSL's `sslCAInfo` is lenient here and
+> masks the problem, so a config that "works with `curl`" can still fail under
+> the in-jail rustls dialer.
+
 ### Disk quota (per-task)
 
 A profile can cap a task's **aggregate** workspace usage. Set `disk_quota_mb`; a
@@ -371,13 +460,14 @@ prevents a runaway task from saturating disk bandwidth.
 
 ### Profiles
 
-Three built-in profiles, chosen per task at submit time:
+Four built-in profiles, chosen per task at submit time:
 
 | profile | use case | mem cap | default timeout |
 |---|---|---|---|
 | `shell` | simple shell commands | 128 MB | 5s |
 | `python` | Python scripts | 256 MB | 5s |
 | `node` | Node.js scripts | 256 MB | 5s |
+| `git` | `git clone`/`commit`/`push` over the egress proxy (CR-12) | 128 MB | 300s |
 
 > The Docker image bundles `python3` (with `requests` / `httpx`) and `node`, so the
 > `python` / `node` profiles run out of the box. Installing extra packages needs an

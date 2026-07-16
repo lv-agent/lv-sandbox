@@ -315,6 +315,77 @@ profiles:
 - `*` 只匹配最左单个 label（`*.pypi.org` 命中 `download.pypi.org`，不命中 `a.b.pypi.org`）。
 - `dry_run: true` 的响应含 `egress_allowlist`，可预览将放行哪些 host。
 
+### Git 出站（git profile,CR-12）
+
+内置 **`git`** profile 让被沙箱化的任务对远端 `git clone`/`commit`/`push`。
+像选其它 profile 一样选中它:
+
+```bash
+# 一次性 job
+curl -X POST http://127.0.0.1:8080/api/v1/jobs -H 'content-type: application/json' -d '{
+  "job_id":"g1",
+  "argv":["/usr/bin/git","clone","fixus::https://github.com/org/repo.git"],
+  "profile_name":"git",
+  "timeout":"300s"
+}'
+
+# 或会话
+s = lv.sessions.create(profile="git")
+```
+
+它构建在 [`shell`](#profile) profile 之上,开启已有的[受控出站](#受控出站egress-allowlist)路径,并追加三件事(定义在 `crates/sandbox-core/src/profile.rs` 的 `SandboxProfile::git()`):
+
+1. **出站白名单** —— 单条规则,指向 git/凭据出口端点。host/port 来自 profile 构造时读取的 env 变量,故需在 **sandbox-server 进程**启动前设置:
+
+   | env 变量 | 默认值 | 说明 |
+   |---|---|---|
+   | `FIXUS_GIT_EGRESS_HOST` | `github.com` | 白名单目标(通常指你的凭据出口代理) |
+   | `FIXUS_GIT_EGRESS_PORT` | `443` | 解析失败回退 `443` |
+   | `FIXUS_GIT_CA_FILE` | *(未设)* | PEM 文件路径;其内容以 `SANDBOX_CA_PEM` 注入 jail,使 jail 内 helper 信任自签/内网 CA 上游(如自托管 GitLab)。未设/不可读/为空 → 不注入 → helper 回退 webpki 内置根(`warn` 日志)。 |
+
+   其它 profile 的零出站基线不变 —— `git` profile 显式放行 git/凭据出口端点。
+
+2. **放宽 rlimit / 超时**(供 clone/push):`cpu_seconds 120`、`nofile 256`、`nproc 256`、`fsize_mb 1024`、`default_timeout 300s`。
+
+3. **`/dev/null` 授 ReadWrite** —— git 以 `O_RDWR` 打开 `/dev/null`,而 landlock device 集只授 `ReadOnly`,会让 git 报 `could not open '/dev/null' for reading and writing`。profile 显式补可写授权(写 /dev/null 是丢弃,零风险)。
+
+#### 经出站代理路由 git
+
+git 本身从不开原始 INET socket —— seccomp 仍杀 `socket(domain != AF_UNIX)`。
+取而代之的是一个 **`git-remote-fixus`** helper 二进制(`crates/git-remote-fixus`,
+装到 jail 内 `PATH` —— 通常 `/usr/bin/git-remote-fixus`,以便 git 的 remote-helper 查找命中),
+实现 `fixus::https://<host>/<path>` 远端 URL scheme。它经 per-job 的 SOCKS5h-over-UDS
+代理(socket 路径取自 `SANDBOX_PROXY_SOCK`,由 cr-019 按 job 注入)拨号,用 rustls TLS,
+说 git smart-HTTP(fetch + push)。git 的全部网络面被圈在白名单 UDS 代理内。
+
+```bash
+# 沙箱内(profile: git)
+git clone fixus::https://github.com/org/repo.git
+git -C repo commit -am "wip"
+git -C repo push origin HEAD
+```
+
+helper 拨号层的 CA 优先级:`SANDBOX_CA_PEM` > `SANDBOX_CA_FILE` > webpki 内置根。
+任一前序源缺失或解析失败 → 降级到下一项 —— 拨号层绝不跳过证书校验。
+
+#### 凭据:哨兵 + 出口代理掉包
+
+凭据进入 jail,但是**伪造/哨兵**值(非秘密占位符)。git 用标准凭据流程
+(credential helper / git config)跑该哨兵。出站白名单指向 jail **外**的
+**凭据出口代理**;该代理识别哨兵 → 掉包为真 token → 转发到 `github.com:443`。
+真 token **仅**存在于代理进程内。
+
+掉包代理的实现体与哨兵 scheme **不在 CR-12 范围**(operator 自行实现);
+CR-12 只定义 jail 侧白名单形态,并保证标准 git 凭据流程对其运行。见
+[security.md · Git 出站与哨兵凭据模型](security.md#git-出站与哨兵凭据模型cr-12)
+与 [network-isolation.md · 经出站代理路由 git](network-isolation.md#经出站代理路由-git-cr-12)。
+
+> **坑 —— 内网 CA TLS。** rustls 拒绝把 CA 证书当叶子使用
+> (`InvalidCertificate(CaUsedAsEndEntity)`)。自托管 GitLab/内网 CA 场景,
+> `FIXUS_GIT_CA_FILE` 指向的 PEM 应是合法的 `CA:TRUE` 根 + `CA:FALSE` 叶子(带 SAN)链。
+> OpenSSL 的 `sslCAInfo` 在此宽松、会掩盖问题,故"用 `curl` 能通"的配置在
+> jail 内 rustls 拨号层仍可能失败。
+
 ### 磁盘配额(每任务)
 
 profile 可给任务的**聚合**工作区用量设上限。配 `disk_quota_mb`;任务工作区增长
@@ -336,13 +407,14 @@ profiles:
 
 ### Profile
 
-内置三个 profile，按任务运行时选择：
+内置四个 profile，按任务运行时选择：
 
 | profile | 适用 | 内存上限 | 默认超时 |
 |---|---|---|---|
 | `shell` | 简单 shell 命令 | 128 MB | 5s |
 | `python` | Python 脚本 | 256 MB | 5s |
 | `node` | Node.js 脚本 | 256 MB | 5s |
+| `git` | 经出站代理 `git clone`/`commit`/`push`(CR-12) | 128 MB | 300s |
 
 > Docker 镜像内置 `python3`（含 `requests`/`httpx`）与 `node`,故 `python`/`node`
 > profile 开箱即用。装额外包需配出站白名单(见[受控出站](#受控出站egress-allowlist))——

@@ -36,6 +36,32 @@
 - **发起网络连接**——`socket(AF_INET, …)` 被杀;出站只能经白名单 UDS SOCKS5 代理(profile 按需开启)。
 - 继承 runner 的密钥环境变量或泄漏 fd。
 
+### Git 出站与哨兵凭据模型(CR-12)
+
+[`git` profile](usage.md#git-出站git-profilecr-12) 让任务开启受控出站以 `git clone`/`push`。
+安全相关要点(靠强制,不靠协作):
+
+- **不变量 1 —— jail 内凭据绕不过代理。** 即使任务拿到凭据、想直连 `github.com` phone home,
+  请求也死在 `socket()`:seccomp `deny_network()` 杀一切 `socket(domain != AF_UNIX)`(`KillProcess` / `SIGSYS`)。
+  git 拿不到原始 INET socket —— 其全部网络走 `git-remote-fixus` helper,而 helper 自身只拨 per-job
+  SOCKS5h UDS 代理。这证明 jail 内凭据是真哨兵,而非伪装的真 token:真 token 也没有 socket 可搭。
+  自动化:`crates/sandbox-seccomp`(`deny_network` → 单条 `socket` 规则,`domain != AF_UNIX` 即杀)
+  与 cr-019 e2e 套件。
+
+- **不变量 2 —— 真凭据仅存于代理进程。** 这是设计保证:真 token 由 jail **外**的**凭据出口代理**持有,
+  绝不注入任务。jail 内 git 对**伪造/哨兵**值跑标准凭据流程;出口代理识别哨兵 → 掉包为真 token →
+  转发到 `github.com:443`。故任务被完全攻陷也无真凭据可外泄。
+
+- **白名单收口(目标闭包)。** 白名单外的 host 被代理以 SOCKS5 `REP = 0x02`(*connection not allowed by ruleset*)拒绝;
+  IP 字面量 `ATYP` 直接被拒(强制 hostname/远程 DNS,保持白名单有意义)。自动化:
+  `sandbox_core::proxy::non_allowlisted_denied`、`sandbox_core::proxy::proxy_rejects_ipv4_literal`、
+  `git-remote-fixus::dialer::non_allowlisted_host_is_denied`。
+
+**掉包代理实现体与哨兵 scheme 不在 CR-12 范围**(operator 自行实现)。CR-12 只定义 jail 侧白名单形态
+(`FIXUS_GIT_EGRESS_HOST`/`FIXUS_GIT_EGRESS_PORT`,默认 `github.com:443`),并保证标准 git 凭据流程对其运行;
+不交付持有真 token 的代理。数据路径见
+[network-isolation.md · 经出站代理路由 git](network-isolation.md#经出站代理路由-git-cr-12)。
+
 ## 不阻止什么
 
 - 基于内核漏洞的逃逸(Landlock/seccomp/cgroup 是内核特性,内核 bug 可颠覆它们)。

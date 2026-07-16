@@ -98,6 +98,58 @@ HTTPS 时 helper 在 relay 流上做 TLS 升级(`ssl`/`tls`)。信任上游证�
 
 ---
 
+## 经出站代理路由 git(CR-12)
+
+[`git` profile](usage.md#git-出站git-profilecr-12) 原样复用上面的 SOCKS5h-over-UDS 路径 —— 它**不**新开出口通道。
+跑 `git clone`/`push` 的被沙箱化任务在 `socket()` 层依然是 AF_UNIX-only;git 的网络由 git remote helper 汇入。
+
+### 组件
+
+- **`git` profile**(`crates/sandbox-core/src/profile.rs` 的 `SandboxProfile::git()`)构建在 shell profile 之上,
+  追加单条规则的 `egress_allowlist`,让 cr-019 代理为该 job 启动。目标来自 profile 构造时读取的 env 变量(设在 sandbox-server 进程上):
+
+  | env 变量 | 默认值 | 含义 |
+  |---|---|---|
+  | `FIXUS_GIT_EGRESS_HOST` | `github.com` | 代理将转发到的 host |
+  | `FIXUS_GIT_EGRESS_PORT` | `443` | 端口(解析失败回退 `443`) |
+  | `FIXUS_GIT_CA_FILE` | *(未设)* | PEM 文件,内容以 `SANDBOX_CA_PEM` 注入 jail |
+
+- **`git-remote-fixus`**(`crates/git-remote-fixus`,装到 jail 内 `PATH` —— 通常 `/usr/bin/git-remote-fixus`)
+  是标准 git remote helper。它自己没有网络:拨 `SANDBOX_PROXY_SOCK`(cr-019 按 job 注入的 UDS 代理),做
+  SOCKS5h `DOMAIN`-`CONNECT` 握手,再 rustls TLS,再 git smart-HTTP(`info/refs` → `git-upload-pack`/`git-receive-pack`)。
+  它对外提供 `fixus::https://` URL scheme:
+
+  ```text
+  ┌──────── 任务(git profile:只能建 AF_UNIX socket)──────────┐
+  │  git clone fixus::https://github.com/org/repo.git          │
+  │   └─ git-remote-fixus → UnixStream::connect(SANDBOX_PROXY_SOCK) ─┘
+  └──────────────────────┬─────────────────────────────────────┘
+                         │ AF_UNIX(Landlock 圈在工作区内)
+  ┌──────────────────────▼─────────────────────────────────────┐
+  │  cr-019 SOCKS5h UDS 代理(server 进程,有真实网络)         │
+  │   白名单校验 → DNS → TCP → github.com:443                  │
+  └────────────────────────────────────────────────────────────┘
+  ```
+
+### 信任与 CA 路径
+
+helper 拨号层的 CA 优先级(`crates/git-remote-fixus/src/dialer.rs`):
+
+1. `SANDBOX_CA_PEM` —— PEM 内容直传(jail 注入通道;由 `git` profile 从 `FIXUS_GIT_CA_FILE` 读入)。用于自托管 GitLab/内网 CA 上游。
+2. `SANDBOX_CA_FILE` —— PEM 文件路径(测试,或文件已在 jail 可读路径时)。
+3. webpki-roots 内置根(默认;真 CA 上游如 `github.com`)。
+
+任一源缺失或解析失败 → 降级到下一项;拨号层绝不跳过校验(失败 = 不信任)。
+
+### 哪些不变
+
+- `socket(AF_INET, …)` 仍被杀 —— `git` profile **不**放宽 seccomp。git 唯一的网络路径仍是白名单 UDS 代理。
+- 白名单外的 host 仍以 SOCKS5 `REP = 0x02` 拒绝;IPv4 字面量 `ATYP` 仍被拒(强制 hostname/远程 DNS)。
+- jail 内凭据是哨兵值;真 token 仅存在于 jail 外、operator 实现的凭据出口代理中。见
+  [security.md · Git 出站与哨兵凭据模型](security.md#git-出站与哨兵凭据模型cr-12)。
+
+---
+
 ## 阻止什么 / 不阻止什么
 
 **阻止:**
@@ -123,5 +175,7 @@ HTTPS 时 helper 在 relay 流上做 TLS 升级(`ssl`/`tls`)。信任上游证�
 - 畸形报文(错误版本、截断问候/请求/domain、超大 method 列表)优雅处理——不 panic、不挂。
 - helper(python + node)经代理走 HTTP 与 HTTPS 往返。
 - `JobProxy` 清理(cancel/早返回路径)——无 fd/task 泄漏。
+- CR-12:`git-remote-fixus::dialer::non_allowlisted_host_is_denied` ——
+  目标在白名单外时 git helper 的拨号被 `PermissionDenied` 拒绝(与代理同样的 `REP = 0x02` 收口)。
 
 运行:`cargo test --workspace`。

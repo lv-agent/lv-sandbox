@@ -73,6 +73,46 @@ ineffective, so node 22+ under allowlist is killed; use denylist + sysctl, or no
   only possible through an allowlisted UDS SOCKS5 proxy (opt-in per profile).
 - Inheriting the runner's secret env vars or leaked fds.
 
+### Git egress & the sentinel credential model (CR-12)
+
+The [`git` profile](usage.md#git-access-git-profile-cr-12) opts a task into
+controlled egress so it can `git clone` / `push`. The security-relevant points
+(live enforcement, not cooperation):
+
+- **Invariant 1 — an in-jail credential cannot bypass the proxy.** Even if a
+  task obtains a credential and tries to phone-home directly to `github.com`,
+  the attempt dies at `socket()`: seccomp `deny_network()` kills any
+  `socket(domain != AF_UNIX)` (`KillProcess` / `SIGSYS`). git never gets a raw
+  INET socket — all of its network goes through the `git-remote-fixus` helper,
+  which itself only dials the per-job SOCKS5h UDS proxy. This proves the
+  in-jail credential is a true sentinel, not a disguised real token: a real
+  token still has no socket to ride out on. Automated in
+  `crates/sandbox-seccomp` (`deny_network` → single `socket` rule,
+  `domain != AF_UNIX` killed) and the cr-019 e2e suite.
+
+- **Invariant 2 — real credentials exist only in the proxy process.** This is a
+  design guarantee: the real token is held by the **credential-exit proxy**
+  *outside* the jail, never injected into the task. Inside the jail git runs its
+  standard credential flow against a **fake / sentinel** value; the exit proxy
+  recognizes the sentinel, swaps it for the real token, and forwards to
+  `github.com:443`. The task therefore has no real credential to exfiltrate
+  even if it is fully compromised.
+
+- **Allowlist 收口 (destination closure).** A non-allowlisted host is rejected
+  by the proxy with SOCKS5 `REP = 0x02` (*connection not allowed by ruleset*),
+  and IP-literal `ATYP`s are rejected outright (forcing hostname / remote DNS,
+  keeping the allowlist meaningful). Automated: `sandbox_core::proxy::non_allowlisted_denied`,
+  `sandbox_core::proxy::proxy_rejects_ipv4_literal`, and
+  `git-remote-fixus::dialer::non_allowlisted_host_is_denied`.
+
+The **swap-proxy body and the sentinel scheme are out of CR-12 scope**
+(operator-implemented). CR-12 defines only the jail-side allowlist shape
+(`FIXUS_GIT_EGRESS_HOST` / `FIXUS_GIT_EGRESS_PORT`, default `github.com:443`)
+and guarantees the standard git credential flow runs against it; it does not
+ship the proxy that holds the real token. See
+[network-isolation.md · Git over the egress proxy](network-isolation.md#git-over-the-egress-proxy-cr-12)
+for the data path.
+
 ## What it does NOT stop
 
 - Kernel exploit-based escapes (Landlock/seccomp/cgroup are kernel features; a

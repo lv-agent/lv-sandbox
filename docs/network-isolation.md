@@ -137,6 +137,72 @@ upstream cert the usual way (`SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS`).
 
 ---
 
+## Git over the egress proxy (CR-12)
+
+The [`git` profile](usage.md#git-access-git-profile-cr-12) reuses the
+SOCKS5h-over-UDS path above unchanged — it does **not** open a new egress
+channel. A sandboxed task running `git clone` / `push` is still AF_UNIX-only at
+the `socket()` layer; git's network is funneled through a git remote helper.
+
+### Pieces
+
+- **`git` profile** (`crates/sandbox-core/src/profile.rs` → `SandboxProfile::git()`)
+  builds on the shell profile and adds a single-rule `egress_allowlist` so the
+  cr-019 proxy is started for the job. The destination comes from env vars read
+  at profile construction (set on the sandbox-server process):
+
+  | env var | default | meaning |
+  |---|---|---|
+  | `FIXUS_GIT_EGRESS_HOST` | `github.com` | host the proxy will forward to |
+  | `FIXUS_GIT_EGRESS_PORT` | `443` | port (parse failure falls back to `443`) |
+  | `FIXUS_GIT_CA_FILE` | *(unset)* | PEM file whose contents are injected into the jail as `SANDBOX_CA_PEM` |
+
+- **`git-remote-fixus`** (`crates/git-remote-fixus`, installed on `PATH` in the
+  jail — conventionally `/usr/bin/git-remote-fixus`) is a standard git remote
+  helper. It owns no networking of its own: it dials `SANDBOX_PROXY_SOCK` (the
+  per-job UDS proxy, injected by cr-019), does the SOCKS5h `DOMAIN`-`CONNECT`
+  handshake, then rustls TLS, then git smart-HTTP (`info/refs` →
+  `git-upload-pack` / `git-receive-pack`). It advertises the `fixus::https://`
+  URL scheme:
+
+  ```text
+  ┌──────── task (git profile: AF_UNIX-only sockets) ──────────┐
+  │  git clone fixus::https://github.com/org/repo.git          │
+  │   └─ git-remote-fixus → UnixStream::connect(SANDBOX_PROXY_SOCK) ─┘
+  └──────────────────────┬─────────────────────────────────────┘
+                         │ AF_UNIX (landlock-confined to workspace)
+  ┌──────────────────────▼─────────────────────────────────────┐
+  │  cr-019 SOCKS5h UDS proxy (server process, real network)   │
+  │   allowlist check → DNS → TCP → github.com:443             │
+  └────────────────────────────────────────────────────────────┘
+  ```
+
+### Trust & the CA path
+
+The helper dialer's CA precedence (`crates/git-remote-fixus/src/dialer.rs`):
+
+1. `SANDBOX_CA_PEM` — PEM content passed verbatim (the jail-injection channel;
+   set by the `git` profile from `FIXUS_GIT_CA_FILE`). Use this for self-hosted
+   GitLab / internal-CA upstreams.
+2. `SANDBOX_CA_FILE` — PEM file path (testing, or when a file is already on a
+   jail-readable path).
+3. webpki-roots built-in roots (default; real-CA upstreams like `github.com`).
+
+Any source that is missing or unparseable falls through to the next; the dialer
+never skips verification (failure = do not trust).
+
+### What does *not* change
+
+- `socket(AF_INET, …)` stays killed — the `git` profile does **not** widen
+  seccomp. git's only network path is still the allowlisted UDS proxy.
+- A non-allowlisted host is still rejected with SOCKS5 `REP = 0x02`; IPv4-literal
+  `ATYP` is still rejected (forces hostname / remote DNS).
+- Credentials inside the jail are sentinel values; the real token lives only in
+  an operator-implemented credential-exit proxy outside the jail. See
+  [security.md · Git egress & the sentinel credential model](security.md#git-egress--the-sentinel-credential-model-cr-12).
+
+---
+
 ## What it stops / does not stop
 
 **Stops:**
@@ -168,5 +234,8 @@ The implementation is covered by integration and e2e tests:
   method list) are handled gracefully — no panic, no hang.
 - Helpers (python + node) round-trip over the proxy for both HTTP and HTTPS.
 - `JobProxy` cleans up (cancel/early-return paths) — no fd/task leak.
+- CR-12: `git-remote-fixus::dialer::non_allowlisted_host_is_denied` — the git
+  helper's dialer is rejected with `PermissionDenied` when the destination is
+  off the allowlist (same `REP = 0x02` closure as the proxy).
 
 Run with: `cargo test --workspace`.
