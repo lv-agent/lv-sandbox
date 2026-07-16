@@ -69,6 +69,37 @@ async fn session_exec_shares_workspace_across_calls() {
     );
 }
 
+/// HOME 与 TMPDIR 必须可写 —— 须指向 landlock 可写根(workspace),而非 session root。
+/// 回归:env 曾把 HOME/TMPDIR 指向不可写的 session root(landlock 只放 workspace),
+/// 牢内任何写 $HOME/$TMPDIR 的程序(git 尤甚:pack/lock/gitconfig)必败。
+/// landlock enforced 时本测试抓该 bug;无 landlock 环境平凡通过(不误报)。
+#[tokio::test]
+async fn session_home_and_tmpdir_are_writable() {
+    let (_tmp, m) = mgr().await;
+    let id = m.create_session("shell", HashMap::new(), None, vec![]).unwrap();
+    let r = m
+        .exec_session(
+            &id,
+            req(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "echo h > \"$HOME/p\" && echo t > \"$TMPDIR/p\" && echo ALL_OK".into(),
+            ]),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let out = String::from_utf8_lossy(&r.stdout);
+    assert!(
+        out.contains("ALL_OK"),
+        "HOME/TMPDIR must be writable in jail; status={:?} stdout={:?} stderr={:?}",
+        r.status,
+        r.stdout,
+        r.stderr
+    );
+}
+
 #[tokio::test]
 async fn session_lifecycle_create_list_get_destroy() {
     let (_tmp, m) = mgr().await;

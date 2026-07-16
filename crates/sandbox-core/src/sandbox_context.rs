@@ -105,10 +105,11 @@ impl SandboxRunner {
         let start = tokio::time::Instant::now();
         let timeout = request.timeout.unwrap_or(profile.default_timeout);
 
-        // sanitized env(profile.env baseline)
+        // sanitized env(profile.env baseline)。home_root 必须是 landlock 可写根(workspace),
+        // 非 session root —— 否则 HOME/TMPDIR 落在不可写区(见 env::build_sanitized_env 契约)。
         let mut env = build_sanitized_env(
             &request.job_id,
-            &job_workspace.root,
+            &job_workspace.workspace,
             &profile.env,
             &request.custom_env,
         );

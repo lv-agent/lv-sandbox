@@ -88,10 +88,10 @@ async fn run_tty(mut socket: WebSocket, sm: Arc<SessionManager>, sid: String, q:
         (m, s)
     };
 
-    // 3. env
+    // 3. env。home_root = landlock 可写根(workspace),非 session root(见 env 契约)。
     let env = build_sanitized_env(
         &sid,
-        &workspace.root,
+        &workspace.workspace,
         &profile.env,
         &std::collections::HashMap::new(),
     );

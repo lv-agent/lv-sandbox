@@ -27,7 +27,7 @@ fn create_job_workspace_generates_correct_directory_layout() {
     // 验证路径拼接正确
     assert_eq!(ws.root, mgr.base_dir().join("job-001"));
     assert_eq!(ws.workspace, mgr.base_dir().join("job-001").join("workspace"));
-    assert_eq!(ws.tmp, mgr.base_dir().join("job-001").join("tmp"));
+    assert_eq!(ws.tmp, mgr.base_dir().join("job-001").join("workspace").join("tmp"));
 }
 
 #[test]

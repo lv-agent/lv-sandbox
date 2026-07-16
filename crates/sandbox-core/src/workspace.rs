@@ -46,15 +46,18 @@ impl WorkspaceManager {
     /// 创建 job 工作空间目录结构
     pub fn create_job_workspace(&self, job_id: &str) -> Result<JobWorkspace, CoreError> {
         let base = self.base_dir.join(job_id);
-        std::fs::create_dir_all(base.join("workspace"))?;
-        std::fs::create_dir_all(base.join("tmp"))?;
+        let workspace = base.join("workspace");
+        std::fs::create_dir_all(&workspace)?;
         std::fs::create_dir_all(base.join("input"))?;
         std::fs::create_dir_all(base.join("output"))?;
+        // TMPDIR 落在 landlock 可写根(workspace)内,须预建(见 env::build_sanitized_env)。
+        let tmp = workspace.join("tmp");
+        std::fs::create_dir_all(&tmp)?;
 
         Ok(JobWorkspace {
             root: base.clone(),
-            workspace: base.join("workspace"),
-            tmp: base.join("tmp"),
+            workspace,
+            tmp,
             input: base.join("input"),
             output: base.join("output"),
         })
@@ -152,14 +155,17 @@ impl WorkspaceManager {
     /// 与一次性 job 目录隔离(命名空间 sessions/),跨 exec 持久。
     pub fn create_session_workspace(&self, id: &str) -> Result<JobWorkspace, CoreError> {
         let base = self.base_dir.join("sessions").join(id);
-        std::fs::create_dir_all(base.join("workspace"))?;
-        std::fs::create_dir_all(base.join("tmp"))?;
+        let workspace = base.join("workspace");
+        std::fs::create_dir_all(&workspace)?;
         std::fs::create_dir_all(base.join("input"))?;
         std::fs::create_dir_all(base.join("output"))?;
+        // TMPDIR 落在 landlock 可写根(workspace)内,须预建(见 env::build_sanitized_env)。
+        let tmp = workspace.join("tmp");
+        std::fs::create_dir_all(&tmp)?;
         Ok(JobWorkspace {
             root: base.clone(),
-            workspace: base.join("workspace"),
-            tmp: base.join("tmp"),
+            workspace,
+            tmp,
             input: base.join("input"),
             output: base.join("output"),
         })
