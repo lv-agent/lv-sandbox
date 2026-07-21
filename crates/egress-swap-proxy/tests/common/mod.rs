@@ -41,6 +41,32 @@ pub fn ephemeral_self_signed_with_key_pem() -> (
     (chain, key, cert_pem, key_pem)
 }
 
+/// 同 [`ephemeral_self_signed_with_key_pem`],但 SAN 由调用方指定。
+///
+/// rcgen 0.14 的 `CertificateParams::new` 自动识别 IP 字面量:
+/// `"127.0.0.1"` → `SanType::IpAddress`、`"localhost"` → `SanType::DnsName`。
+///
+/// Task 4 E2E 用 `&["127.0.0.1"]` 生成 fake upstream 证 —— swap-proxy 经
+/// `ServerName::IpAddress(127.0.0.1)` 连入时,只有 IP SAN 能通过 rustls 验证。
+#[allow(dead_code)]
+pub fn ephemeral_self_signed_for(
+    sans: &[&str],
+) -> (
+    Vec<CertificateDer<'static>>,
+    PrivateKeyDer<'static>,
+    String,
+    String,
+) {
+    let sans_owned: Vec<String> = sans.iter().map(|s| s.to_string()).collect();
+    let certified_key = rcgen::generate_simple_self_signed(sans_owned)
+        .expect("rcgen self-signed cert with custom SANs");
+    let cert_pem = certified_key.cert.pem();
+    let key_pem = certified_key.signing_key.serialize_pem();
+    let chain = parse_chain(&cert_pem);
+    let key = parse_key(&key_pem);
+    (chain, key, cert_pem, key_pem)
+}
+
 fn parse_chain(pem: &str) -> Vec<CertificateDer<'static>> {
     let mut reader = std::io::Cursor::new(pem.as_bytes());
     rustls_pemfile::certs(&mut reader)
