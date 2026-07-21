@@ -70,8 +70,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let up = upstream_cfg.clone();
         tokio::spawn(async move {
             // 单连接超时包一层,无论卡在哪一步都不会挂死。
-            let _ = tokio::time::timeout(CONN_TIMEOUT, handle_conn(tcp, acceptor, cfg, up)).await;
-            tracing::trace!(%peer, "conn closed");
+            // I-2:结果显式 match —— 非 SwapError 失败(TLS 握手 / upstream 连接 / relay 错)
+            //       必须在 warn 级可见,否则生产故障不可观测。
+            let res = tokio::time::timeout(CONN_TIMEOUT, handle_conn(tcp, acceptor, cfg, up)).await;
+            match res {
+                Ok(Ok(())) => tracing::trace!(%peer, "conn closed"),
+                Ok(Err(e)) => warn!(%peer, error = %e, "conn handler"),
+                Err(_) => warn!(%peer, timeout = ?CONN_TIMEOUT, "conn timed out"),
+            }
         });
     }
 }
@@ -115,14 +121,14 @@ async fn handle_conn(
     let header_block = &buf[..hdr_end]; // 不含尾 \r\n\r\n
     let body_so_far = &buf[hdr_end + 4..]; // 头之后已读到的请求体字节
 
-    // 2) 改写 Authorization。错 → 401 不转发。
+    // 2) 改写 Authorization。错 → 401 不转发(missing / mismatch / multiple)。
     let rewritten = match swap::rewrite_authorization(header_block, &cfg.sentinel, &cfg.real_token) {
         Ok(b) => b,
         Err(e) => {
             tls.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
                 .await?;
             let _ = tls.shutdown().await;
-            info!(error = %e, "rejected (sentinel missing/mismatch) → 401");
+            info!(error = %e, "rejected (not forwarded) → 401");
             return Ok(());
         }
     };
@@ -172,17 +178,12 @@ fn split_host_port(s: &str) -> (String, u16) {
     }
 }
 
-/// 构建入站 TLS 服务端配置。cert/key 优先 env;缺则运行期自签(仅测试/operator 起栈用)。
+/// 构建入站 TLS 服务端配置。cert/key 必填(`from_env` 已 fail-fast 校验)。
+/// I-5:**无自签回退** —— 生产 misconfig(忘设 CERT_PEM/KEY_PEM)在 `from_env` 即退出码 2,
+/// 而不是静默起一个自签证(fail-open 风险)。测试用证书由 tests/common 生成后经 env 注入。
 fn build_server_config(cfg: &config::SwapConfig) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
-    let (cert_chain, key_der) = match (&cfg.cert_pem, &cfg.key_pem) {
-        (Some(cert), Some(key)) => (load_certs(cert)?, load_key(key)?),
-        _ => {
-            warn!(
-                "FIXUS_SWAP_CERT_PEM/KEY_PEM absent → generating ephemeral self-signed cert (TEST ONLY; production must supply operator cert)"
-            );
-            ephemeral_self_signed()?
-        }
-    };
+    let cert_chain = load_certs(&cfg.cert_pem)?;
+    let key_der = load_key(&cfg.key_pem)?;
     Ok(rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key_der)?)
@@ -237,21 +238,4 @@ fn load_key(
     let key = rustls_pemfile::private_key(&mut reader)?
         .ok_or_else(|| "no private key found in FIXUS_SWAP_KEY_PEM".to_string())?;
     Ok(key)
-}
-
-/// rcgen 运行期自签证书(测试/operator 未提供证时回退)。
-/// 复用 git-remote-fixus dialer.rs 的 PEM round-trip 模式(rcgen 0.14 + rustls-pemfile 2 已验证)。
-fn ephemeral_self_signed() -> Result<
-    (
-        Vec<rustls::pki_types::CertificateDer<'static>>,
-        rustls::pki_types::PrivateKeyDer<'static>,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    let certified_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
-    let cert_pem = certified_key.cert.pem();
-    let key_pem = certified_key.signing_key.serialize_pem();
-    let chain = load_certs(&cert_pem)?;
-    let key = load_key(&key_pem)?;
-    Ok((chain, key))
 }

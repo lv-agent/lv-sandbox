@@ -13,14 +13,14 @@ tokio-rustls = { workspace = true, features = ["ring"] }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
-# rcgen 在 main.rs 的 ephemeral_self_signed 运行期回退里使用(测试/operator 未提供证时自签),
-# 故是常规依赖而非 dev-dep(plan 原稿列为 dev-dep 会令 main.rs 无法编译)。
-rcgen = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+# rcgen 仅测试用(在 tests/common 生成自签证 → 经 env 注入 swap-proxy)。
+# I-5:不再在 production binary 里(rcgen 原是 regular dep,会让 main.rs 的自签回退编译进 prod)。
+rcgen = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [lib]
