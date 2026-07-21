@@ -19,3 +19,7 @@ rustls-pemfile = "2"
 [dev-dependencies]
 tempfile = "3"
 rcgen = "0.14"
+# cr-12 G2 Task 6:real-git E2E 经 swap-proxy(进程内 server::serve)。
+egress-swap-proxy = { path = "../egress-swap-proxy" }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true, features = ["ring"] }
