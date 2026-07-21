@@ -28,23 +28,43 @@ use crate::dialer;
 pub struct FixusHttp {
     proxy_sock: PathBuf,
     config: Arc<ClientConfig>,
+    /// cr-12 G2:每个请求注入的 Authorization 头(由 `FIXUS_GIT_SENTINEL` env 构造)。
+    /// None = 不加(匿名上游,G1 兼容)。sentinel 非密;真 token 在牢外 swap-proxy。
+    auth_header: Option<String>,
 }
 
 impl FixusHttp {
-    pub fn new(proxy_sock: PathBuf, config: Arc<ClientConfig>) -> Self {
-        Self { proxy_sock, config }
+    pub fn new(
+        proxy_sock: PathBuf,
+        config: Arc<ClientConfig>,
+        auth_header: Option<String>,
+    ) -> Self {
+        Self { proxy_sock, config, auth_header }
     }
 
-    /// 用 dialer::env_client_config 解析 CA 信任(优先级 SANDBOX_CA_PEM > SANDBOX_CA_FILE
-    /// > webpki-roots)。jail 侧 CA 经 git profile 以 SANDBOX_CA_PEM 注入。
+    /// CA 信任(SANDBOX_CA_PEM > SANDBOX_CA_FILE > webpki-roots)
+    /// + sentinel(FIXUS_GIT_SENTINEL)→ Authorization 头。两者均从 jail env 读
+    /// (由 git profile 注入)。⇒ main.rs:38 的 with_default_roots 调用无需改。
     pub fn with_default_roots(proxy_sock: PathBuf) -> Self {
-        Self::new(proxy_sock, dialer::env_client_config())
+        let auth_header = std::env::var("FIXUS_GIT_SENTINEL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| format!("Authorization: Bearer {s}"));
+        Self::new(proxy_sock, dialer::env_client_config(), auth_header)
     }
 
     /// 测试用:自签场景传跳过校验的 config。
     #[cfg(test)]
     pub(crate) fn with_insecure(proxy_sock: PathBuf) -> Self {
-        Self::new(proxy_sock, dialer::insecure_client_config())
+        Self::new(proxy_sock, dialer::insecure_client_config(), None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_insecure_and_auth(
+        proxy_sock: PathBuf,
+        auth_header: Option<String>,
+    ) -> Self {
+        Self::new(proxy_sock, dialer::insecure_client_config(), auth_header)
     }
 }
 
@@ -546,7 +566,10 @@ impl Http for FixusHttp {
             dialer::connect_with_config(&self.proxy_sock, host_only, port, self.config.clone())
                 .map_err(io_err)?;
         let mut conn = Conn::new(stream);
-        let hdrs: Vec<String> = headers.into_iter().map(|h| h.as_ref().to_string()).collect();
+        let mut hdrs: Vec<String> = headers.into_iter().map(|h| h.as_ref().to_string()).collect();
+        if let Some(auth) = &self.auth_header {
+            hdrs.insert(0, auth.clone());
+        }
         conn.send_request("GET", &path, &host, &hdrs, None)
             .map_err(io_err)?;
         let shared = Arc::new(Mutex::new(conn));
@@ -581,7 +604,10 @@ impl Http for FixusHttp {
             dialer::connect_with_config(&self.proxy_sock, host_only, port, self.config.clone())
                 .map_err(io_err)?;
         let conn = Conn::new(stream);
-        let hdrs: Vec<String> = headers.into_iter().map(|h| h.as_ref().to_string()).collect();
+        let mut hdrs: Vec<String> = headers.into_iter().map(|h| h.as_ref().to_string()).collect();
+        if let Some(auth) = &self.auth_header {
+            hdrs.insert(0, auth.clone());
+        }
         let shared = Arc::new(Mutex::new(conn));
         Ok(PostResponse {
             post_body: PostBody {
@@ -944,6 +970,55 @@ mod tests {
             Some(i) => String::from_utf8_lossy(&req[i + 4..]).into_owned(),
             None => String::new(),
         }
+    }
+
+    #[test]
+    fn get_sends_bearer_when_auth_set() {
+        let sentinel = "test-sentinel-123";
+        let port = spawn_tls_http(move |_m, _p, req| {
+            let want = format!("Authorization: Bearer {sentinel}");
+            if req.windows(want.len()).any(|w| w == want.as_bytes()) {
+                return http_200("ok-bearer");
+            }
+            http_status(401, "Unauthorized")
+        });
+        thread::sleep(std::time::Duration::from_millis(50));
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join(".proxy.sock");
+        let _proxy = spawn_proxy(sock.clone());
+        wait_sock(&sock);
+
+        let auth = format!("Authorization: Bearer {sentinel}");
+        let mut http = FixusHttp::with_insecure_and_auth(sock, Some(auth));
+        let url = format!("https://localhost:{port}/info/refs");
+        let mut resp = http.get(&url, "", std::iter::empty::<&str>()).expect("get ok");
+        drop(resp.headers);
+        let mut body = String::new();
+        resp.body.read_to_string(&mut body).unwrap();
+        assert_eq!(body, "ok-bearer", "auth_header set → upstream saw bearer → 200");
+    }
+
+    #[test]
+    fn get_no_bearer_when_absent_is_401() {
+        let port = spawn_tls_http(|_m, _p, req| {
+            if req.windows(15).any(|w| w == b"Authorization: ") {
+                return http_200("should-not-happen");
+            }
+            http_status(401, "Unauthorized")
+        });
+        thread::sleep(std::time::Duration::from_millis(50));
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join(".proxy.sock");
+        let _proxy = spawn_proxy(sock.clone());
+        wait_sock(&sock);
+
+        let mut http = FixusHttp::with_insecure(sock); // no auth
+        let url = format!("https://localhost:{port}/x");
+        let mut resp = http.get(&url, "", std::iter::empty::<&str>()).expect("get returns response");
+        drop(resp.headers);
+        let mut sink = String::new();
+        let err = resp.body.read_to_string(&mut sink).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "no bearer → 401");
     }
 }
 
