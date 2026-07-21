@@ -375,10 +375,53 @@ helper 拨号层的 CA 优先级:`SANDBOX_CA_PEM` > `SANDBOX_CA_FILE` > webpki �
 **凭据出口代理**;该代理识别哨兵 → 掉包为真 token → 转发到 `github.com:443`。
 真 token **仅**存在于代理进程内。
 
-掉包代理的实现体与哨兵 scheme **不在 CR-12 范围**(operator 自行实现);
-CR-12 只定义 jail 侧白名单形态,并保证标准 git 凭据流程对其运行。见
+**G2(2026-07-21)—— 哨兵接缝已形式化,参考掉包代理在树内交付**,
+位于 `crates/egress-swap-proxy`(二进制 `fixus-egress-swap-proxy`):jail 外运行,
+TLS 终结 helper 连接,识别哨兵 → 掉包为真 token → 转发到真上游(默认 `github.com:443`)。
+真 token **仅**存在于该进程内。树内 SOCKS 代理(`crates/sandbox-core/src/proxy.rs`)保持透明中继(未改)。
+生产掉包代理**仍可由 operator 按同契约自行实现** —— 树内的是参考实现。见
 [security.md · Git 出站与哨兵凭据模型](security.md#git-出站与哨兵凭据模型cr-12)
 与 [network-isolation.md · 经出站代理路由 git](network-isolation.md#经出站代理路由-git-cr-12)。
+
+##### 参考掉包代理 env 契约
+
+`fixus-egress-swap-proxy` 全经 env 配置(无配置文件):
+
+| env | 默认 | 用途 |
+| --- | --- | --- |
+| `FIXUS_SWAP_LISTEN` | `127.0.0.1:8443` | 代理监听地址 |
+| `FIXUS_SWAP_SENTINEL` | *(必填)* | 期望哨兵(须与牢侧 `FIXUS_GIT_SENTINEL` 同值) |
+| `FIXUS_SWAP_TOKEN` | *(必填)* | 要掉包进去的真 token(**仅**在本进程内) |
+| `FIXUS_SWAP_UPSTREAM` | `github.com:443` | 真 upstream `host:port` |
+| `FIXUS_SWAP_CERT_PEM` | *(必填)* | 入站 TLS 证书 PEM(牢侧 helper 经 `FIXUS_GIT_CA_FILE`/`SANDBOX_CA_PEM` 信任) |
+| `FIXUS_SWAP_KEY_PEM` | *(必填)* | 入站 TLS 私钥 PEM |
+| `FIXUS_SWAP_UPSTREAM_CA_PEM` | webpki-roots | upstream TLS 的 CA(自托管 GitLab/内网 CA 时设置) |
+
+必填项无默认、无回退:缺失则 fail-closed。二进制内**无**自签回退 —— 生产必须提供真证书。
+
+##### operator 接线配方
+
+牢侧(在 `sandbox-server` 启动前设置,以便 `git` profile 构造任务时读到):
+
+```
+FIXUS_GIT_SENTINEL=<sentinel>
+FIXUS_GIT_EGRESS_HOST=<swap-proxy-host>
+FIXUS_GIT_CA_FILE=<proxy-cert-PEM>     # 信任掉包代理的入站证书
+```
+
+掉包代理侧(运行 `fixus-egress-swap-proxy` 时):
+
+```
+FIXUS_SWAP_SENTINEL=<same-sentinel>
+FIXUS_SWAP_TOKEN=<real-token>
+FIXUS_SWAP_CERT_PEM=<...>
+FIXUS_SWAP_KEY_PEM=<...>
+# 可选:FIXUS_SWAP_UPSTREAM=gitlab.internal:443 FIXUS_SWAP_UPSTREAM_CA_PEM=<...>
+```
+
+两侧哨兵必须同值;任何不匹配代理返回 `401`。G1 的三作用域 `CapabilityPolicy`
+(Operator ∩ Tenant ∩ Task,`agent_role=operator`)仍 gate 网络出站 ——
+掉包代理只管凭据掉包,不管出站授权。
 
 > **坑 —— 内网 CA TLS。** rustls 拒绝把 CA 证书当叶子使用
 > (`InvalidCertificate(CaUsedAsEndEntity)`)。自托管 GitLab/内网 CA 场景,

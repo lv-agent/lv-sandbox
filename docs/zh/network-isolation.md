@@ -145,7 +145,9 @@ helper 拨号层的 CA 优先级(`crates/git-remote-fixus/src/dialer.rs`):
 
 - `socket(AF_INET, …)` 仍被杀 —— `git` profile **不**放宽 seccomp。git 唯一的网络路径仍是白名单 UDS 代理。
 - 白名单外的 host 仍以 SOCKS5 `REP = 0x02` 拒绝;IPv4 字面量 `ATYP` 仍被拒(强制 hostname/远程 DNS)。
-- jail 内凭据是哨兵值;真 token 仅存在于 jail 外、operator 实现的凭据出口代理中。见
+- jail 内凭据是哨兵值;真 token 仅存在于 jail 外的凭据出口(掉包)代理中。
+  **G2(2026-07-21):参考掉包代理已在树内交付**,位于 `crates/egress-swap-proxy`
+  (二进制 `fixus-egress-swap-proxy`);生产仍可按同契约用 operator 自实现的代理。见
   [security.md · Git 出站与哨兵凭据模型](security.md#git-出站与哨兵凭据模型cr-12)。
 
 ---

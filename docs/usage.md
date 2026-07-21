@@ -422,11 +422,60 @@ config) against the sentinel. The egress allowlist points at a
 swaps it for the real token, and forwards to `github.com:443`. The real token
 exists **only** in the proxy process.
 
-The swap-proxy body and the sentinel scheme are **out of CR-12 scope**
-(operator-implemented); CR-12 defines only the jail-side allowlist shape and
-guarantees the standard git credential flow runs against it. See
+**G2 (2026-07-21) — the sentinel seam is formalized and a reference swap-proxy
+ships in-tree** at `crates/egress-swap-proxy` (binary `fixus-egress-swap-proxy`):
+out-of-jail, TLS-terminates the helper's connection, recognizes the sentinel,
+swaps in the real token, forwards to the real upstream (default
+`github.com:443`). The real token exists **only** in that process. The in-tree
+SOCKS proxy (`crates/sandbox-core/src/proxy.rs`) stays a transparent relay
+(unchanged). The production swap-proxy **can still be operator-implemented**
+against the same contract — the in-tree one is a reference. See
 [security.md · Git egress & the sentinel credential model](security.md#git-egress--the-sentinel-credential-model-cr-12)
 and [network-isolation.md · Git over the egress proxy](network-isolation.md#git-over-the-egress-proxy-cr-12).
+
+##### Reference swap-proxy env contract
+
+`fixus-egress-swap-proxy` is configured entirely via env (no config file):
+
+| env | default | purpose |
+| --- | --- | --- |
+| `FIXUS_SWAP_LISTEN` | `127.0.0.1:8443` | address the proxy listens on |
+| `FIXUS_SWAP_SENTINEL` | *(required)* | sentinel it expects (must equal jail-side `FIXUS_GIT_SENTINEL`) |
+| `FIXUS_SWAP_TOKEN` | *(required)* | real token to swap in (exists **only** in this process) |
+| `FIXUS_SWAP_UPSTREAM` | `github.com:443` | real upstream `host:port` |
+| `FIXUS_SWAP_CERT_PEM` | *(required)* | inbound TLS cert PEM (jail helper trusts this via `FIXUS_GIT_CA_FILE`/`SANDBOX_CA_PEM`) |
+| `FIXUS_SWAP_KEY_PEM` | *(required)* | inbound TLS private key PEM |
+| `FIXUS_SWAP_UPSTREAM_CA_PEM` | webpki-roots | CA for the upstream TLS (set for self-hosted GitLab / internal CA) |
+
+Required items have no default and no fallback: the proxy fail-closes if
+absent. There is **no self-signed fallback** in the binary — production must
+supply a real cert.
+
+##### Operator wiring recipe
+
+Jail side (set before `sandbox-server` starts, so the `git` profile can read
+them when constructing each task):
+
+```
+FIXUS_GIT_SENTINEL=<sentinel>
+FIXUS_GIT_EGRESS_HOST=<swap-proxy-host>
+FIXUS_GIT_CA_FILE=<proxy-cert-PEM>     # trusts the swap-proxy's inbound cert
+```
+
+Swap-proxy side (run `fixus-egress-swap-proxy` with):
+
+```
+FIXUS_SWAP_SENTINEL=<same-sentinel>
+FIXUS_SWAP_TOKEN=<real-token>
+FIXUS_SWAP_CERT_PEM=<...>
+FIXUS_SWAP_KEY_PEM=<...>
+# optional: FIXUS_SWAP_UPSTREAM=gitlab.internal:443 FIXUS_SWAP_UPSTREAM_CA_PEM=<...>
+```
+
+The sentinel value must be identical on both sides; the proxy returns `401` on
+any mismatch. The three-scope `CapabilityPolicy`
+(Operator ∩ Tenant ∩ Task, `agent_role=operator`) still gates net egress as in
+G1 — the swap-proxy only handles the credential swap, not egress authorization.
 
 > **Gotcha — internal-CA TLS.** rustls rejects a CA certificate served as a leaf
 > (`InvalidCertificate(CaUsedAsEndEntity)`). For a self-hosted GitLab / internal

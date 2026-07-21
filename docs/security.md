@@ -105,13 +105,34 @@ controlled egress so it can `git clone` / `push`. The security-relevant points
   `sandbox_core::proxy::proxy_rejects_ipv4_literal`, and
   `git-remote-fixus::dialer::non_allowlisted_host_is_denied`.
 
-The **swap-proxy body and the sentinel scheme are out of CR-12 scope**
-(operator-implemented). CR-12 defines only the jail-side allowlist shape
-(`FIXUS_GIT_EGRESS_HOST` / `FIXUS_GIT_EGRESS_PORT`, default `github.com:443`)
-and guarantees the standard git credential flow runs against it; it does not
-ship the proxy that holds the real token. See
-[network-isolation.md · Git over the egress proxy](network-isolation.md#git-over-the-egress-proxy-cr-12)
-for the data path.
+- **Invariant 3 — wrong/missing sentinel → 401, no upstream contact.** The
+  swap-proxy compares the bearer token against the expected sentinel
+  (case-sensitive); on mismatch or absence it returns `401 Unauthorized`
+  **without** opening any connection to the upstream. The real token is never
+  sent on a request that did not first prove possession of the sentinel.
+
+**G2 (2026-07-21) — the sentinel seam is now formalized and shipped in-tree.**
+A **reference swap-proxy** lives at `crates/egress-swap-proxy` (binary
+`fixus-egress-swap-proxy`): out-of-jail, TLS-terminates the jail helper's
+connection, recognizes the sentinel, swaps it for the real token, and forwards
+to the real upstream (default `github.com:443`). The real token exists **only**
+in that process. The in-tree SOCKS proxy (`crates/sandbox-core/src/proxy.rs`)
+stays a transparent relay (unchanged) — it is a separate component from the
+swap-proxy. All three invariants above are exercised end-to-end by the
+`egress_swap_proxy` and cr-019 test suites.
+
+CR-12 still defines the jail-side allowlist shape (`FIXUS_GIT_EGRESS_HOST` /
+`FIXUS_GIT_EGRESS_PORT`, default `github.com:443`); **G2 adds the swap-proxy
+seam contract that the allowlist points at.** The production swap-proxy **can
+still be operator-implemented** against the same contract — the in-tree one is a
+reference, not a hard dependency. Operators point
+`FIXUS_GIT_EGRESS_HOST`/`FIXUS_GIT_EGRESS_PORT` at whichever swap-proxy they
+run, and must supply a real TLS cert: the reference proxy **fail-closes** if
+`FIXUS_SWAP_CERT_PEM` / `FIXUS_SWAP_KEY_PEM` are absent — there is no
+self-signed fallback in the binary. Env contract and wiring recipe in
+[usage.md · Credentials: sentinel + exit-proxy swap](usage.md#credentials-sentinel--exit-proxy-swap);
+data path in
+[network-isolation.md · Git over the egress proxy](network-isolation.md#git-over-the-egress-proxy-cr-12).
 
 ## What it does NOT stop
 

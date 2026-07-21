@@ -57,9 +57,24 @@
   `sandbox_core::proxy::non_allowlisted_denied`、`sandbox_core::proxy::proxy_rejects_ipv4_literal`、
   `git-remote-fixus::dialer::non_allowlisted_host_is_denied`。
 
-**掉包代理实现体与哨兵 scheme 不在 CR-12 范围**(operator 自行实现)。CR-12 只定义 jail 侧白名单形态
-(`FIXUS_GIT_EGRESS_HOST`/`FIXUS_GIT_EGRESS_PORT`,默认 `github.com:443`),并保证标准 git 凭据流程对其运行;
-不交付持有真 token 的代理。数据路径见
+- **不变量 3 —— 哨兵错/缺 → 401,不触上游。** 掉包代理把 bearer token
+  与期望哨兵做大小写敏感比较;不匹配或缺失时返回 `401 Unauthorized`,且**不**向上游开任何连接。
+  真 token 绝不会出现在未先证明持有哨兵的请求上。
+
+**G2(2026-07-21)—— 哨兵接缝已形式化并在树内交付。**
+**参考掉包代理**位于 `crates/egress-swap-proxy`(二进制 `fixus-egress-swap-proxy`):
+jail 外运行,TLS 终结 helper 的连接,识别哨兵 → 掉包为真 token → 转发到真上游(默认 `github.com:443`)。
+真 token **仅**存在于该进程内。树内 SOCKS 代理(`crates/sandbox-core/src/proxy.rs`)保持透明中继(未改)
+—— 它与掉包代理是独立组件。上述三个不变量由 `egress_swap_proxy` 与 cr-019 测试套件端到端覆盖。
+
+CR-12 仍只定义 jail 侧白名单形态(`FIXUS_GIT_EGRESS_HOST`/`FIXUS_GIT_EGRESS_PORT`,默认 `github.com:443`);
+**G2 增补掉包代理的接缝契约,白名单指向它。** 生产掉包代理**仍可由 operator 按同契约自行实现**
+—— 树内的是参考实现,非硬依赖。operator 把 `FIXUS_GIT_EGRESS_HOST`/`FIXUS_GIT_EGRESS_PORT`
+指向自己运行的任一掉包代理,且**必须**提供真 TLS 证书:参考代理在
+`FIXUS_SWAP_CERT_PEM`/`FIXUS_SWAP_KEY_PEM` 缺失时**fail-closed**(拒绝启动)
+—— 二进制内**无**自签回退。env 契约与接线配方见
+[usage.md · 凭据:哨兵 + 出口代理掉包](usage.md#凭据哨兵--出口代理掉包);
+数据路径见
 [network-isolation.md · 经出站代理路由 git](network-isolation.md#经出站代理路由-git-cr-12)。
 
 ## 不阻止什么

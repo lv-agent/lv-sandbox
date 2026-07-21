@@ -198,7 +198,10 @@ never skips verification (failure = do not trust).
 - A non-allowlisted host is still rejected with SOCKS5 `REP = 0x02`; IPv4-literal
   `ATYP` is still rejected (forces hostname / remote DNS).
 - Credentials inside the jail are sentinel values; the real token lives only in
-  an operator-implemented credential-exit proxy outside the jail. See
+  a credential-exit (swap) proxy outside the jail. **G2 (2026-07-21): a
+  reference swap-proxy ships in-tree** at `crates/egress-swap-proxy` (binary
+  `fixus-egress-swap-proxy`); production may still use an operator-implemented
+  proxy against the same contract. See
   [security.md · Git egress & the sentinel credential model](security.md#git-egress--the-sentinel-credential-model-cr-12).
 
 ---
