@@ -1,0 +1,32 @@
+[package]
+name = "egress-swap-proxy"
+description = "cr-12 G2 reference swap-proxy: TLS-terminate jail helper, recognize sentinel, swap for real token, forward to upstream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+# tokio-rustls:workspace 已关 default(去 aws_lc_rs),这里补 ring + 基础 feature。
+tokio-rustls = { workspace = true, features = ["ring"] }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
+# rcgen 在 main.rs 的 ephemeral_self_signed 运行期回退里使用(测试/operator 未提供证时自签),
+# 故是常规依赖而非 dev-dep(plan 原稿列为 dev-dep 会令 main.rs 无法编译)。
+rcgen = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lib]
+name = "egress_swap_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fixus-egress-swap-proxy"
+path = "src/main.rs"

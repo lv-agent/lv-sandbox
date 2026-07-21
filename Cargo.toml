@@ -10,6 +10,7 @@ members = [
     "crates/lv-cli",
     "crates/sandbox-broker",
     "crates/git-remote-fixus",
+    "crates/egress-swap-proxy",
     "tests/e2e",
 ]
 
@@ -94,3 +95,12 @@ uuid = { version = "1", features = ["v4"] }
 # cr-087: fixus broker bridge 消费侧
 logdb-client = { path = "../../logdb/lv-logdb/logdb-client", features = ["broker"] }
 logdb-broker-proto = { path = "../../logdb/lv-logdb/logdb-broker-proto" }
+
+# cr-12 G2: egress-swap-proxy (sentinel→real 兑换)。版本对齐 git-remote-fixus(rustls 0.23 + rcgen 0.14 + webpki-roots 1.0)。
+# rustls 0.23 的 aws-lc-rs / ring 双 CryptoProvider 必须只选一个,否则见两个 → 运行期 panic。
+# 全 workspace 对齐 ring(git-remote-fixus 也是 ring)。tokio-rustls 关 default(默认含 aws_lc_rs)。
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12"] }
+rustls-pemfile = "2"
+webpki-roots = "1.0"
+rcgen = "0.14"
