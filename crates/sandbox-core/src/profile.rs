@@ -170,12 +170,15 @@ impl SandboxProfile {
             .and_then(|s| s.parse().ok())
             .unwrap_or(443);
         let ca_pem = read_git_ca_pem();
-        Self::git_inner(&host, port, ca_pem.as_deref())
+        let sentinel = std::env::var("FIXUS_GIT_SENTINEL")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        Self::git_inner(&host, port, ca_pem.as_deref(), sentinel.as_deref())
     }
 
     /// cr-12: git profile 构造(纯函数,无 env 读取)。把 host/port/CA 作为显式入参,
     /// 使行为可并行单测(避免进程级 env 在并行测试下竞态)。env → 入参胶水在 [`SandboxProfile::git`]。
-    fn git_inner(host: &str, port: u16, ca_pem: Option<&str>) -> Self {
+    fn git_inner(host: &str, port: u16, ca_pem: Option<&str>, sentinel: Option<&str>) -> Self {
         let mut p = Self::shell();
         p.name = "git".into();
         p.rlimit = RlimitConfig::new()
@@ -195,6 +198,11 @@ impl SandboxProfile {
         // cr-12 CA 注入(见 read_git_ca_pem)。env 通道免 jail fs 依赖。
         if let Some(pem) = ca_pem {
             p.env.insert("SANDBOX_CA_PEM".to_string(), pem.to_string());
+        }
+        // cr-12 G2: sentinel 占位凭据进牢(helper 据此加 Authorization 头;出口代理 fake→real 兑换)。
+        // 非密可公开;真 token 只在牢外 swap-proxy 进程内。与 CA 同走 env 接丝。
+        if let Some(s) = sentinel {
+            p.env.insert("FIXUS_GIT_SENTINEL".to_string(), s.to_string());
         }
         // cr-12: git 以 O_RDWR 打开 /dev/null(plumbing / 默认空对象),而 landlock
         // device_paths() 只授 /dev/null ReadOnly → 拒写 → "could not open '/dev/null'
@@ -325,7 +333,7 @@ mod tests {
     fn git_profile_injects_ca_pem_when_provided() {
         // 纯 seam:行为可并行测,不碰进程 env。
         let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
-        let g = SandboxProfile::git_inner("github.com", 443, Some(pem));
+        let g = SandboxProfile::git_inner("github.com", 443, Some(pem), None);
         assert_eq!(
             g.env.get("SANDBOX_CA_PEM").map(String::as_str),
             Some(pem),
@@ -335,8 +343,25 @@ mod tests {
 
     #[test]
     fn git_profile_no_ca_when_absent() {
-        let g = SandboxProfile::git_inner("github.com", 443, None);
+        let g = SandboxProfile::git_inner("github.com", 443, None, None);
         assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "no CA → no injection");
+    }
+
+    #[test]
+    fn git_profile_injects_sentinel_when_provided() {
+        // 纯 seam:sentinel 走 profile.env,与 SANDBOX_CA_PEM 同接缝。
+        let g = SandboxProfile::git_inner("github.com", 443, None, Some("sentinel-XYZ"));
+        assert_eq!(
+            g.env.get("FIXUS_GIT_SENTINEL").map(String::as_str),
+            Some("sentinel-XYZ"),
+            "sentinel provided → FIXUS_GIT_SENTINEL injected verbatim"
+        );
+    }
+
+    #[test]
+    fn git_profile_no_sentinel_when_absent() {
+        let g = SandboxProfile::git_inner("github.com", 443, None, None);
+        assert!(!g.env.contains_key("FIXUS_GIT_SENTINEL"), "no sentinel → no injection");
     }
 
     #[test]
@@ -372,6 +397,28 @@ mod tests {
     }
 
     #[test]
+    fn git_reads_fixus_git_sentinel_env() {
+        // env → 入参 胶水冒烟;与其它 FIXUS_GIT_* env 测试互斥(mutex 序列化)。
+        let _g = lock_git_env();
+        std::env::set_var("FIXUS_GIT_SENTINEL", "env-sentinel-ABC");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_SENTINEL");
+        assert_eq!(
+            g.env.get("FIXUS_GIT_SENTINEL").map(String::as_str),
+            Some("env-sentinel-ABC"),
+            "FIXUS_GIT_SENTINEL env → profile.env wiring"
+        );
+
+        std::env::set_var("FIXUS_GIT_SENTINEL", "   ");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_SENTINEL");
+        assert!(
+            !g.env.contains_key("FIXUS_GIT_SENTINEL"),
+            "blank sentinel → not injected"
+        );
+    }
+
+    #[test]
     fn git_profile_grants_dev_null_writable() {
         // cr-12: git O_RDWR 打开 /dev/null,需 ReadWrite(写 /dev/null = 丢弃,无害)。
         let g = SandboxProfile::git();
@@ -386,13 +433,13 @@ mod tests {
     #[test]
     fn git_profile_egress_port_overridable() {
         // 纯 seam:port 落 allowlist。
-        let g = SandboxProfile::git_inner("github.com", 8443, None);
+        let g = SandboxProfile::git_inner("github.com", 8443, None, None);
         assert_eq!(
             g.egress_allowlist[0].port,
             Some(8443),
             "explicit port lands in allowlist"
         );
-        let g = SandboxProfile::git_inner("github.com", 443, None);
+        let g = SandboxProfile::git_inner("github.com", 443, None, None);
         assert_eq!(g.egress_allowlist[0].port, Some(443), "default port 443");
     }
 
