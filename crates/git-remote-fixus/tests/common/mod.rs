@@ -1,5 +1,10 @@
 //! Shared test helpers for git-remote-fixus integration tests.
 //!
+//! 不同集成测试 target(e2e_clone / cr12_g2_swap_clone_push / cr12_g2_real_github)
+//! 各用本模块的不同子集,故 per-target dead_code 是预期的 —— 整模块放行。
+
+#![allow(dead_code)]
+//!
 //! cr-12 G1 (`tests/e2e_clone.rs`) 与 cr-12 G2(`tests/cr12_g2_swap_clone_push.rs`)
 //! 共用的脚手架:rcgen 自签证书 + SOCKS5h-over-UDS 代理 + TLS git-http-backend CGI
 //! 上游(可选记录 Authorization 头)+ git 命令包装。

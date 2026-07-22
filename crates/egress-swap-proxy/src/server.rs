@@ -109,8 +109,23 @@ pub async fn handle_conn(
     let header_block = &buf[..hdr_end]; // 不含尾 \r\n\r\n
     let body_so_far = &buf[hdr_end + 4..]; // 头之后已读到的请求体字节
 
-    // 2) 改写 Authorization。错 → 401 不转发(missing / mismatch / multiple)。
-    let rewritten = match swap::rewrite_authorization(header_block, &cfg.sentinel, &cfg.real_token) {
+    // 2) 算 upstream host header + 连真上游。
+    let (up_host, up_port) = split_host_port(&cfg.upstream);
+    // live 验证(真 github):转发的 Host 头必须是 upstream host(github 按 Host 虚拟路由,
+    // 否则 301 重定向,helper 不跟重定向 → 失败)。443(默认 https)省略端口;非默认端口带端口。
+    let upstream_host_header = if up_port == 443 {
+        up_host.clone()
+    } else {
+        format!("{up_host}:{up_port}")
+    };
+
+    // 3) 改写 Authorization(sentinel→real)+ Host(→upstream)。错 → 401 不转发。
+    let rewritten = match swap::rewrite_request_headers(
+        header_block,
+        &cfg.sentinel,
+        &cfg.real_token,
+        &upstream_host_header,
+    ) {
         Ok(b) => b,
         Err(e) => {
             tls.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
@@ -121,14 +136,13 @@ pub async fn handle_conn(
         }
     };
 
-    // 3) 连真上游(TLS)。ServerName 取 upstream host。
-    let (up_host, up_port) = split_host_port(&cfg.upstream);
+    // 4) 连真上游(TLS)。ServerName 取 upstream host。
     let up_tcp = tokio::net::TcpStream::connect((up_host.as_str(), up_port)).await?;
     let connector = tokio_rustls::TlsConnector::from(upstream_cfg);
     let server_name = rustls::pki_types::ServerName::try_from(up_host.clone())?;
     let mut up = connector.connect(server_name, up_tcp).await?;
 
-    // 4) 发改写后头部 + 终止空行 + 头之后已读体。
+    // 5) 发改写后头部 + 终止空行 + 头之后已读体。
     up.write_all(&rewritten).await?;
     up.write_all(b"\r\n\r\n").await?;
     if !body_so_far.is_empty() {
