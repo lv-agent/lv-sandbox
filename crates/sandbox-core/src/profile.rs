@@ -179,7 +179,44 @@ impl SandboxProfile {
         let sentinel = std::env::var("FIXUS_GIT_SENTINEL")
             .ok()
             .filter(|s| !s.trim().is_empty());
-        let helper_dir = std::env::var("FIXUS_GIT_HELPER_DIR").ok();
+        // M-1: canonicalize FIXUS_GIT_HELPER_DIR before handing to git_inner. The dir
+        // receives landlock ReadExecute, so a broad/relative/raw value over-grants;
+        // canonicalize resolves symlinks + makes it absolute. On failure (path doesn't
+        // exist / unreadable) → fail-safe (no injection, no exec grant). Warn on
+        // suspiciously broad roots (operator may have misconfigured) but still apply.
+        let helper_dir = std::env::var("FIXUS_GIT_HELPER_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|raw| match std::fs::canonicalize(&raw) {
+                Ok(canon) => {
+                    let canon_str = canon.to_string_lossy();
+                    let is_broad_root = matches!(
+                        canon_str.as_ref(),
+                        "/" | "/home" | "/tmp" | "/usr" | "/etc" | "/var" | "/opt" | "/bin" | "/sbin"
+                    ) || std::env::var_os("HOME")
+                        .map(|h| canon == std::path::PathBuf::from(&h))
+                        .unwrap_or(false);
+                    if is_broad_root {
+                        tracing::warn!(
+                            path = %canon.display(),
+                            raw = %raw,
+                            "FIXUS_GIT_HELPER_DIR resolves to a suspiciously broad root; \
+                             applying (operator explicitly set it) but this grants landlock \
+                             ReadExecute on the entire tree — narrow to the helper's own dir"
+                        );
+                    }
+                    Some(canon.to_string_lossy().into_owned())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        raw = %raw,
+                        error = %e,
+                        "FIXUS_GIT_HELPER_DIR unresolvable; skipping PATH injection and \
+                         landlock exec grant (fail-safe)"
+                    );
+                    None
+                }
+            });
         let mut p = Self::git_inner(
             &host,
             port,
@@ -187,12 +224,16 @@ impl SandboxProfile {
             sentinel.as_deref(),
             helper_dir.as_deref(),
         );
-        // cr-12: operator 可经 FIXUS_GIT_NPROC 覆盖 nproc。RLIMIT_NPROC 计的是 real-UID 全机
-        // 进程/线程数(非子树),默认 256 在共享 uid 宿主(同 uid 跑 broker/tools-bank/sandbox-
+        // cr-12 + M-3: operator 可经 FIXUS_GIT_NPROC 覆盖 nproc。RLIMIT_NPROC 计的是 real-UID
+        // 全机进程/线程数(非子树),默认 256 在共享 uid 宿主(同 uid 跑 broker/tools-bank/sandbox-
         // server 等多进程)上会立刻撑爆,牢内 git fork(EAGAIN)整个废掉。生产单租户硬化 uid
-        // 下默认 256 仍合身;共享/builder 宿主 operator 显式抬升。env 缺/非法 → 保留默认。
-        if let Ok(v) = std::env::var("FIXUS_GIT_NPROC") {
-            if let Ok(n) = v.trim().parse::<u64>() {
+        // 下默认 256 仍合身;共享/builder 宿主 operator 显式抬升。env 缺/非法/0 → 保留默认
+        // (0 = foot-gun:RLIMIT_NPROC=0 禁所有 fork,而 forbid-fork 是 seccomp 的职责,非 nproc)。
+        if let Some(n) = std::env::var("FIXUS_GIT_NPROC")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+        {
+            if n > 0 {
                 p.rlimit.nproc = Some(n);
             }
         }
@@ -236,11 +277,22 @@ impl SandboxProfile {
         // cr-12: helper(git-remote-fixus)必须对牢内 git 可见。jail PATH 默认 /usr/bin:/bin
         // (env.rs stage 1);profile.env(stage 2)可覆盖 PATH。operator 经 FIXUS_GIT_HELPER_DIR
         // 指向含 git-remote-fixus 的目录,profile 把它前置到 jail PATH。
+        // M-2: 若 dir 含 ':' 则跳过 PATH 注入 + exec 授予 —— git 的 PATH 解析器会把含 ':'
+        // 的条目切成两段,无法安全表达。canonicalize 后 Linux 上几乎不会出现 ':',但兜底
+        // (git_inner 是公开纯接缝,直调可传任意字符串)。
         if let Some(dir) = helper_dir.filter(|s| !s.trim().is_empty()) {
-            p.env.insert("PATH".to_string(), format!("{dir}:/usr/bin:/bin"));
-            // landlock:git exec helper 需 ReadExecute(system_exec_paths 只放 /bin、/usr/bin,
-            // helper 不在其中)。extra_exec_paths 在 process.rs 编译为 landlock ReadExecute。
-            p.extra_exec_paths.push(PathBuf::from(dir));
+            if dir.contains(':') {
+                tracing::warn!(
+                    dir = %dir,
+                    "helper dir contains ':' — skipping PATH injection and landlock exec grant \
+                     (git PATH parser would split the entry)"
+                );
+            } else {
+                p.env.insert("PATH".to_string(), format!("{dir}:/usr/bin:/bin"));
+                // landlock:git exec helper 需 ReadExecute(system_exec_paths 只放 /bin、/usr/bin,
+                // helper 不在其中)。extra_exec_paths 在 process.rs 编译为 landlock ReadExecute。
+                p.extra_exec_paths.push(PathBuf::from(dir));
+            }
         }
         // cr-12: git 以 O_RDWR 打开 /dev/null(plumbing / 默认空对象),而 landlock
         // device_paths() 只授 /dev/null ReadOnly → 拒写 → "could not open '/dev/null'
@@ -558,5 +610,116 @@ mod tests {
         let g = SandboxProfile::git();
         std::env::remove_var("FIXUS_GIT_NPROC");
         assert_eq!(g.rlimit.nproc, Some(256), "invalid FIXUS_GIT_NPROC → keep default 256");
+    }
+
+    // cr-12 review M-3: FIXUS_GIT_NPROC=0 是 foot-gun(RLIMIT_NPROC=0 禁所有 fork;
+    // forbid-fork 是 seccomp 的职责)。0 必须等价于"未设" → 保留默认 256。
+    #[test]
+    fn git_nproc_zero_keeps_default() {
+        let _g = lock_git_env();
+        std::env::set_var("FIXUS_GIT_NPROC", "0");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_NPROC");
+        assert_eq!(
+            g.rlimit.nproc,
+            Some(256),
+            "FIXUS_GIT_NPROC=0 must not forbid all fork (keep default 256)"
+        );
+    }
+
+    // cr-12 review M-1: FIXUS_GIT_HELPER_DIR 真目录 → canonical 路径进 PATH +
+    // extra_exec_paths(landlock ReadExecute)。mutex 序列化(动 FIXUS_GIT_* env)。
+    #[test]
+    fn git_helper_dir_real_dir_canonicalized_and_applied() {
+        let _g = lock_git_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let canon = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+        std::env::set_var("FIXUS_GIT_HELPER_DIR", dir.path());
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_HELPER_DIR");
+        let canon_str = canon.to_string_lossy();
+        let expected_path = format!("{canon_str}:/usr/bin:/bin");
+        assert_eq!(
+            g.env.get("PATH").map(String::as_str),
+            Some(expected_path.as_str()),
+            "real dir → canonical path prepended to jail PATH (raw env may be non-canonical)"
+        );
+        assert!(
+            g.extra_exec_paths.iter().any(|p| p == &canon),
+            "real dir → canonical path in extra_exec_paths (landlock ReadExecute)"
+        );
+        // 恰好一条 exec grant(不重复注入)。
+        assert_eq!(
+            g.extra_exec_paths.len(),
+            1,
+            "exactly one helper exec grant"
+        );
+    }
+
+    // cr-12 review M-1: 不存在的路径 → fail-safe(不注入 PATH、不授 exec)。canonicalize
+    // 失败等价于"未设",而非"原样下传" —— 防 operator 误指向不存在的目录后,raw 字符串仍被
+    // 当作 landlock 路径(不存在的 landlock 路径无害但语义混乱;PATH 注入则会污染 jail)。
+    #[test]
+    fn git_helper_dir_nonexistent_fail_safe() {
+        let _g = lock_git_env();
+        let bogus = format!(
+            "/tmp/fixus-git-helper-does-not-exist-{}",
+            std::process::id()
+        );
+        let _ = std::fs::remove_dir_all(&bogus);
+        std::env::set_var("FIXUS_GIT_HELPER_DIR", &bogus);
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_HELPER_DIR");
+        assert!(
+            !g.env.contains_key("PATH"),
+            "unresolvable helper dir → no PATH injection (fail-safe)"
+        );
+        assert!(
+            g.extra_exec_paths.is_empty(),
+            "unresolvable helper dir → no landlock exec grant (fail-safe)"
+        );
+    }
+
+    // cr-12 review M-2: 含 ':' 的 dir 无法安全表达为 PATH 单段(git PATH 解析器会把它切两段)。
+    // git_inner 是纯接丝,直传含 ':' 的字符串 → 跳过 PATH 注入 + exec 授予。
+    #[test]
+    fn git_helper_dir_with_colon_skips_path_injection() {
+        let g = SandboxProfile::git_inner(
+            "github.com",
+            443,
+            None,
+            None,
+            Some("/weird:dir/bin"),
+        );
+        assert!(
+            !g.env.contains_key("PATH"),
+            "helper dir containing ':' must not be injected into PATH"
+        );
+        assert!(
+            g.extra_exec_paths.is_empty(),
+            "helper dir containing ':' must not receive landlock exec grant"
+        );
+    }
+
+    // cr-12 review M-2 对照组:无 ':' 的 dir 正常注入(确保上面的负断言不是"总是不注入")。
+    #[test]
+    fn git_helper_dir_without_colon_injects_normally() {
+        let g = SandboxProfile::git_inner(
+            "github.com",
+            443,
+            None,
+            None,
+            Some("/opt/fixus/bin"),
+        );
+        assert_eq!(
+            g.env.get("PATH").map(String::as_str),
+            Some("/opt/fixus/bin:/usr/bin:/bin"),
+            "colon-free dir → PATH injected"
+        );
+        assert_eq!(
+            g.extra_exec_paths,
+            vec![std::path::PathBuf::from("/opt/fixus/bin")],
+            "colon-free dir → exec grant applied"
+        );
     }
 }
