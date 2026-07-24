@@ -23,3 +23,6 @@ rcgen = "0.14"
 egress-swap-proxy = { path = "../egress-swap-proxy" }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true, features = ["ring"] }
+# cr-12 Task 5:plain fixus_bash E2E drive(MCP JSON-RPC over HTTP)。
+reqwest = { workspace = true }
+serde_json = { workspace = true }

@@ -198,6 +198,26 @@ fn spawn_sandbox_broker() -> Proc {
     }
 }
 
+/// POST /mcp tools/call,返回完整 McpResponse JSON。
+async fn mcp_call(port: u16, session_id: &str, policy_json: Option<&str>,
+                  tool: &str, command: &str) -> serde_json::Value {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60)).build().unwrap();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool, "arguments": {"command": command}}
+    });
+    let mut req = client.post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("X-Fixus-Session-Id", session_id)
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if let Some(p) = policy_json {
+        req = req.header("X-Fixus-Policy", p);
+    }
+    let resp = req.send().await.expect("POST /mcp");
+    resp.json().await.expect("mcp json")
+}
+
 /// 本层:起 in-process CGI 上游 + swap-proxy,验证 token 兑换通道就绪。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "full-stack: needs FIXUS_E2E_TOOLS_BANK_BIN + FIXUS_E2E_BROKER_BIN + prebuilt workspace"]
@@ -242,4 +262,14 @@ async fn e2e_full_stack_bringup() {
     wait_port("127.0.0.1:3001");
     tokio::time::sleep(std::time::Duration::from_millis(500)).await; // consumer group 加入
     eprintln!("[bringup] broker+server+bridge+tools-bank ready");
+
+    // 5) plain bash(shell profile,无 policy)→ 证上栈通。
+    let task_id = "e2e-plain-bash";
+    let v = mcp_call(3001, task_id, None, "fixus_bash", "echo hello-from-sandbox").await;
+    let text = v["result"]["content"][0]["text"].as_str().expect("content text");
+    let out: serde_json::Value = serde_json::from_str(text).expect("ToolResult json");
+    assert_eq!(out["exit_code"], 0, "plain bash failed: {v}");
+    let stdout = out["stdout"].as_str().unwrap_or("");
+    assert!(stdout.contains("hello-from-sandbox"), "stdout mismatch: {stdout}");
+    eprintln!("[plain-bash] stdout={stdout:?} — upper stack OK");
 }
