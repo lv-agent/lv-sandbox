@@ -20,7 +20,6 @@ const SENTINEL: &str = "jail-sentinel-E2E";
 const REAL_TOKEN: &str = "real-token-E2E";
 
 /// 子进程 RAII:drop 时 kill+reap,panic 也清。
-#[allow(dead_code)] // Task 4+ 起调用
 struct Proc {
     child: Child,
     name: &'static str,
@@ -34,7 +33,6 @@ impl Drop for Proc {
 }
 
 /// 取必需 env 指针;缺 → 指引并 panic(外层 `#[ignore]`,手动跑)。
-#[allow(dead_code)] // Task 4+ 起调用
 fn require_bin(env_name: &str) -> String {
     match std::env::var(env_name) {
         Ok(v) if !v.is_empty() => v,
@@ -46,7 +44,6 @@ fn require_bin(env_name: &str) -> String {
 }
 
 /// workspace target/debug(sibling bin 都在此)。
-#[allow(dead_code)] // Task 4+ 起调用
 fn target_debug() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_BIN_EXE_git-remote-fixus"))
         .parent()
@@ -65,10 +62,146 @@ fn wait_port(addr: &str) {
     panic!("port not ready: {addr}");
 }
 
+fn write_tmp(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, content).unwrap();
+    p
+}
+
+/// 起 logdb-broker(embedded logdbd)+ 返回 Proc。bind 5100(= sandbox-broker/tools-bank 默认 --broker-addr)。
+///
+/// 注:`embedded: true` 下 broker 把 `logdbd_addr` 当 `SocketAddr` parse(非 URL),
+/// 故写成裸 `127.0.0.1:50051`;`data_dir` 显式指向 tempdir 避免 `./data` 落到 workspace。
+fn spawn_broker(dir: &std::path::Path) -> Proc {
+    let bin = require_bin("FIXUS_E2E_BROKER_BIN");
+    let data_dir = dir.join("logdb-data");
+    let cfg = write_tmp(
+        dir,
+        "broker.yaml",
+        &format!(
+            "bind_addr: \"127.0.0.1:5100\"\n\
+             logdbd_addr: \"127.0.0.1:50051\"\n\
+             embedded: true\n\
+             num_shards: 4\n\
+             session_timeout_ms: 10000\n\
+             data_dir: \"{}\"\n",
+            data_dir.display()
+        ),
+    );
+    let child = Command::new(&bin)
+        .env("LOGDB_BROKER_CONFIG", &cfg)
+        .env("RUST_LOG", "warn")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn logdb-broker: {e}"));
+    Proc {
+        child,
+        name: "logdb-broker",
+    }
+}
+
+fn spawn_tools_bank() -> Proc {
+    let bin = require_bin("FIXUS_E2E_TOOLS_BANK_BIN");
+    let child = Command::new(&bin)
+        .args([
+            "--broker-addr",
+            "127.0.0.1:5100",
+            "--region",
+            "default",
+            "--port",
+            "3001",
+        ])
+        .env("LOGDBD_NAMESPACE", "default")
+        .env("RUST_LOG", "warn")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn tools-bank: {e}"));
+    Proc {
+        child,
+        name: "tools-bank",
+    }
+}
+
+fn spawn_sandbox_server(
+    dir: &std::path::Path,
+    swap_port: u16,
+    inbound_cert_pem: &str,
+) -> Proc {
+    let bin = target_debug().join("sandbox-server");
+    let base_dir = dir.join("sandboxes");
+    let cfg = write_tmp(
+        dir,
+        "sandbox-server.yaml",
+        &format!(
+            "server:\n  listen_addr: \"127.0.0.1:8080\"\n  log_level: \"info\"\n  log_format: \"text\"\n\
+             sandbox:\n  base_dir: \"{base}\"\n  fail_closed: false\n  default_profile: \"shell\"\n\
+             profiles:\n  shell:\n    rlimit:\n      nproc: 8192\n      nofile: 256\n",
+            base = base_dir.display()
+        ),
+    );
+    let cert_file = write_tmp(dir, "git-ca.pem", inbound_cert_pem);
+    let mut path = std::ffi::OsString::from(target_debug());
+    path.push(":");
+    if let Ok(p) = std::env::var("PATH") {
+        path.push(p);
+    }
+    let child = Command::new(&bin)
+        .args(["--config", cfg.to_str().unwrap()])
+        .env("PATH", &path)
+        .env("FIXUS_GIT_SENTINEL", SENTINEL)
+        .env("FIXUS_GIT_EGRESS_HOST", "localhost")
+        .env("FIXUS_GIT_EGRESS_PORT", swap_port.to_string())
+        .env("FIXUS_GIT_CA_FILE", &cert_file)
+        .env("RUST_LOG", "info")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn sandbox-server: {e}"));
+    Proc {
+        child,
+        name: "sandbox-server",
+    }
+}
+
+fn spawn_sandbox_broker() -> Proc {
+    let bin = target_debug().join("sandbox-broker");
+    let mut cmd = Command::new(&bin);
+    cmd.args([
+        "--broker-addr",
+        "127.0.0.1:5100",
+        "--sandbox-url",
+        "http://127.0.0.1:8080",
+        "--region",
+        "default",
+        "--group",
+        "sandboxes",
+    ])
+    .env("LOGDBD_NAMESPACE", "default")
+    .env("RUST_LOG", "warn")
+    .env_remove("HTTP_PROXY")
+    .env_remove("HTTPS_PROXY")
+    .env_remove("http_proxy")
+    .env_remove("https_proxy")
+    .env_remove("ALL_PROXY")
+    .env_remove("all_proxy")
+    .env("NO_PROXY", "*")
+    .env("no_proxy", "*")
+    .stdout(Stdio::inherit())
+    .stderr(Stdio::inherit());
+    Proc {
+        child: cmd
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn sandbox-broker: {e}")),
+        name: "sandbox-broker",
+    }
+}
+
 /// 本层:起 in-process CGI 上游 + swap-proxy,验证 token 兑换通道就绪。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "full-stack: needs FIXUS_E2E_TOOLS_BANK_BIN + FIXUS_E2E_BROKER_BIN + prebuilt workspace"]
-async fn e2e_scaffold_swap_proxy_and_upstream() {
+async fn e2e_full_stack_bringup() {
     let root = tempfile::tempdir().expect("tempdir");
 
     // 1) 本地 TLS git-http-backend 上游(记录 Authorization)。
@@ -99,6 +232,14 @@ async fn e2e_scaffold_swap_proxy_and_upstream() {
     wait_port(&format!("127.0.0.1:{swap_port}"));
     eprintln!("[scaffold] swap-proxy :{swap_port} → upstream :{up_port} OK");
 
-    // 占位:让 `Stdio`/`Command` import 在本层不算 dead-code(Task 4 起用 Proc 起外部 bin)。
-    let _ = Command::new("true").stdout(Stdio::null());
+    // 4) 起外部进程栈。
+    let _broker = spawn_broker(root.path());
+    wait_port("127.0.0.1:5100");
+    let _sandbox_server = spawn_sandbox_server(root.path(), swap_port, &inbound.cert_pem);
+    wait_port("127.0.0.1:8080");
+    let _sandbox_broker = spawn_sandbox_broker();
+    let _tools_bank = spawn_tools_bank();
+    wait_port("127.0.0.1:3001");
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await; // consumer group 加入
+    eprintln!("[bringup] broker+server+bridge+tools-bank ready");
 }
