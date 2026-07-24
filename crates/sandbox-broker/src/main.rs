@@ -359,4 +359,44 @@ mod tests {
         let m = meta_with_policy("not json");
         assert_eq!(net_profile_override(&m), None);
     }
+
+    /// cr-12 契约钉子:fixus `EffectivePolicy` 的 serde 输出(精确形状)→ net_profile_override。
+    /// fixus 改 serde 形状(字段名/大小写/枚举变体)→ 此测试断 → 正是目的。
+    #[test]
+    fn net_profile_override_fixus_effective_policy_shape() {
+        use std::collections::HashMap;
+        // 精确复刻 fixus policy.rs 的默认 serde 输出(snake_case;agent_role/operator;
+        // net.egress 元素 {host,ports,category?};ports 默认 [] 也发;category None 省略)。
+        let policy_json = serde_json::json!({
+            "fs": {"read_paths": [], "write_paths": []},
+            "net": {"egress": [{"host": "localhost", "ports": [8443], "category": "https_api"}]},
+            "agent_role": "operator"
+        }).to_string();
+        let mut meta = HashMap::new();
+        meta.insert("effective_policy".into(), policy_json);
+        assert_eq!(net_profile_override(&meta), Some("git"));
+
+        // 反例 1:egress 空(fixus 默认 deny-all)→ None。
+        let empty = serde_json::json!({
+            "fs": {"read_paths": [], "write_paths": []},
+            "net": {"egress": []},
+            "agent_role": "operator"
+        }).to_string();
+        let mut m2 = HashMap::new();
+        m2.insert("effective_policy".into(), empty.to_string());
+        assert_eq!(net_profile_override(&m2), None);
+
+        // 反例 2:Reader(fixus role_narrow 会清空 net)→ None(fail-closed)。
+        let reader = serde_json::json!({
+            "fs": {"read_paths": [], "write_paths": []},
+            "net": {"egress": []},
+            "agent_role": "reader"
+        }).to_string();
+        let mut m3 = HashMap::new();
+        m3.insert("effective_policy".into(), reader.to_string());
+        assert_eq!(net_profile_override(&m3), None);
+
+        // 反例 3:缺 effective_policy 键 → None。
+        assert_eq!(net_profile_override(&HashMap::new()), None);
+    }
 }
