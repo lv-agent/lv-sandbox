@@ -340,30 +340,20 @@ async fn e2e_full_stack_bringup() {
     );
     eprintln!("[git-clone] clone OK (seed commit present); upstream saw {auth}");
 
-    // 8) 安全负向:非 allowlist host(example.invalid)经 SOCKS 必被拒(allowlist 只放 localhost)。
-    let neg = mcp_call(
-        3001,
-        "e2e-git-neg",
-        Some(&policy),
-        "fixus_bash",
-        "git -c protocol.version=0 clone fixus::https://example.invalid/x.git neg-out 2>&1; true",
-    )
-    .await;
-    let ntext = neg["result"]["content"][0]["text"]
-        .as_str()
-        .expect("content text");
-    let nout: serde_json::Value = serde_json::from_str(ntext).expect("ToolResult json");
+    // 8) 安全负向:非 allowlist 但可解析的 host(example.com)→ SOCKS allowlist 必按 hostname 拒。
+    //    用可解析 host(非 .invalid)才真正走 allowlist 判定;断 REP=/socks 标记才证是 SOCKS 拒,
+    //    而非 DNS/其他失败。allowlist = [{localhost, swap_port}],example.com 不在白名单。
+    let neg = mcp_call(3001, "e2e-git-neg", Some(&policy), "fixus_bash",
+        "git -c protocol.version=0 clone fixus::https://example.com/x.git neg-out 2>&1").await;
+    let ntext = neg["result"]["content"][0]["text"].as_str().expect("content text");
+    // tools-bank 对 isError=true 的 ToolResult 前缀加 "exit code N: ";剥到首个 '{' 取 JSON。
+    let njson = ntext.find('{').map(|i| &ntext[i..]).unwrap_or(ntext);
+    let nout: serde_json::Value = serde_json::from_str(njson).expect("ToolResult json");
     let nstdout = nout["stdout"].as_str().unwrap_or("");
-    // 非白名单 host:要么 SOCKS 拒绝(连接失败),要么 DNS/连接错误。断言未成功 clone。
-    assert!(
-        !nstdout.contains("Cloning into bare repository")
-            || nout["exit_code"] != 0
-            || nstdout.to_lowercase().contains("error")
-            || nstdout.contains("example.invalid"),
-        "non-allowlist host should NOT clone cleanly; stdout: {nstdout}"
-    );
-    eprintln!(
-        "[security] non-allowlist clone rejected — SOCKS allowlist holds (stdout snippet: {})",
-        nstdout.chars().take(160).collect::<String>()
-    );
+    assert_ne!(nout["exit_code"], 0, "non-allowlist host MUST be rejected: {neg}");
+    let low = nstdout.to_lowercase();
+    assert!(low.contains("rep=") || low.contains("socks"),
+        "rejection must be SOCKS-allowlist-specific (REP=/socks), got: {nstdout}");
+    eprintln!("[security] non-allowlist host rejected by SOCKS allowlist (exit={}): {}",
+        nout["exit_code"], nstdout.chars().take(160).collect::<String>());
 }
