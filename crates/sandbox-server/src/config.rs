@@ -353,6 +353,7 @@ impl ProfileConfig {
             disk_quota_mb: self.disk_quota_mb,
             env: self.env.clone().unwrap_or_default(),
             extra_writable_paths: vec![],
+            extra_exec_paths: vec![],
         })
     }
 }

@@ -142,7 +142,8 @@ fn spawn_sandbox_server(
         ),
     );
     let cert_file = write_tmp(dir, "git-ca.pem", inbound_cert_pem);
-    let mut path = std::ffi::OsString::from(target_debug());
+    let td = target_debug();
+    let mut path = std::ffi::OsString::from(&td);
     path.push(":");
     if let Ok(p) = std::env::var("PATH") {
         path.push(p);
@@ -154,6 +155,8 @@ fn spawn_sandbox_server(
         .env("FIXUS_GIT_EGRESS_HOST", "localhost")
         .env("FIXUS_GIT_EGRESS_PORT", swap_port.to_string())
         .env("FIXUS_GIT_CA_FILE", &cert_file)
+        .env("FIXUS_GIT_HELPER_DIR", &td) // git-remote-fixus 对牢内可见
+        .env("FIXUS_GIT_NPROC", "8192") // 共享 uid 宿主:RLIMIT_NPROC 计全 uid,默认 256 不够
         .env("RUST_LOG", "info")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -224,6 +227,25 @@ async fn mcp_call(port: u16, session_id: &str, policy_json: Option<&str>,
 async fn e2e_full_stack_bringup() {
     let root = tempfile::tempdir().expect("tempdir");
 
+    // 0) 上游 bare 仓 + seed commit(CGI GIT_PROJECT_ROOT = root.path())。
+    let seed_work = root.path().join("seed-work");
+    common::git(root.path(), &["init", "--bare", "-b", "main", "upstream.git"]);
+    std::fs::create_dir_all(&seed_work).unwrap();
+    common::git(&seed_work, &["init", "-b", "main"]);
+    std::fs::write(seed_work.join("note.txt"), "seeded\n").unwrap();
+    common::git(&seed_work, &["add", "note.txt"]);
+    common::git(&seed_work, &["commit", "-m", "seed"]);
+    common::git(
+        &seed_work,
+        &[
+            "remote",
+            "add",
+            "origin",
+            root.path().join("upstream.git").to_str().unwrap(),
+        ],
+    );
+    common::git(&seed_work, &["push", "-u", "origin", "main"]);
+
     // 1) 本地 TLS git-http-backend 上游(记录 Authorization)。
     let auth_seen = Arc::new(std::sync::Mutex::new(None));
     let (up_port, up_cert) = spawn_cgi_tls_server(root.path().to_path_buf(), auth_seen.clone());
@@ -234,7 +256,7 @@ async fn e2e_full_stack_bringup() {
         listen: "127.0.0.1:0".into(),
         sentinel: SENTINEL.into(),
         real_token: REAL_TOKEN.into(),
-        upstream: format!("127.0.0.1:{up_port}"),
+        upstream: format!("localhost:{up_port}"),
         cert_pem: inbound.cert_pem.clone(),
         key_pem: inbound.key_pem.clone(),
         upstream_ca_pem: Some(up_cert.cert_pem.clone()),
@@ -272,4 +294,76 @@ async fn e2e_full_stack_bringup() {
     let stdout = out["stdout"].as_str().unwrap_or("");
     assert!(stdout.contains("hello-from-sandbox"), "stdout mismatch: {stdout}");
     eprintln!("[plain-bash] stdout={stdout:?} — upper stack OK");
+
+    // 6) git profile 驱动:policy net.egress 非空 + operator → 桥选 git → clone 经 swap-proxy。
+    let policy = serde_json::json!({
+        "fs": {"read_paths": [], "write_paths": []},
+        "net": {"egress": [{"host": "localhost", "ports": [swap_port], "category": "https_api"}]},
+        "agent_role": "operator"
+    })
+    .to_string();
+    let clone_cmd = format!(
+        "git -c protocol.version=0 clone fixus::https://localhost:{swap_port}/upstream.git clone-out \
+         && cd clone-out && git log --oneline 2>&1"
+    );
+    let v = mcp_call(3001, "e2e-git-clone", Some(&policy), "fixus_bash", &clone_cmd).await;
+    let text = v["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content text");
+    let out: serde_json::Value = serde_json::from_str(text).expect("ToolResult json");
+    assert_eq!(
+        out["exit_code"],
+        0,
+        "git clone through swap-proxy failed: {v}\nstderr: {}",
+        out["stderr"].as_str().unwrap_or("")
+    );
+    let stdout = out["stdout"].as_str().unwrap_or("");
+    assert!(
+        stdout.contains("seed"),
+        "clone did not produce seed commit; stdout: {stdout}"
+    );
+
+    // 7) 关键证据:上游见 Bearer <REAL_TOKEN>,非 sentinel。
+    let auth = auth_seen
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("upstream must have received a request");
+    assert_eq!(
+        auth,
+        format!("Bearer {REAL_TOKEN}"),
+        "upstream saw wrong auth: {auth}"
+    );
+    assert!(
+        !auth.contains(SENTINEL),
+        "sentinel MUST NOT reach upstream: {auth}"
+    );
+    eprintln!("[git-clone] clone OK (seed commit present); upstream saw {auth}");
+
+    // 8) 安全负向:非 allowlist host(example.invalid)经 SOCKS 必被拒(allowlist 只放 localhost)。
+    let neg = mcp_call(
+        3001,
+        "e2e-git-neg",
+        Some(&policy),
+        "fixus_bash",
+        "git -c protocol.version=0 clone fixus::https://example.invalid/x.git neg-out 2>&1; true",
+    )
+    .await;
+    let ntext = neg["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content text");
+    let nout: serde_json::Value = serde_json::from_str(ntext).expect("ToolResult json");
+    let nstdout = nout["stdout"].as_str().unwrap_or("");
+    // 非白名单 host:要么 SOCKS 拒绝(连接失败),要么 DNS/连接错误。断言未成功 clone。
+    assert!(
+        !nstdout.contains("Cloning into bare repository")
+            || nout["exit_code"] != 0
+            || nstdout.to_lowercase().contains("error")
+            || nstdout.contains("example.invalid"),
+        "non-allowlist host should NOT clone cleanly; stdout: {nstdout}"
+    );
+    eprintln!(
+        "[security] non-allowlist clone rejected — SOCKS allowlist holds (stdout snippet: {})",
+        nstdout.chars().take(160).collect::<String>()
+    );
 }

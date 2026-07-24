@@ -37,6 +37,9 @@ pub struct SandboxProfile {
     pub env: HashMap<String, String>,
     /// cr-028: 额外可写路径(卷等,landlock ReadWrite)。默认空。
     pub extra_writable_paths: Vec<PathBuf>,
+    /// cr-12: 额外可执行路径(landlock ReadExecute)。operator-supplied helper 二进制
+    /// 所在目录(如 git-remote-fixus 不在 /usr/bin 时),profile 据此授 exec。默认空。
+    pub extra_exec_paths: Vec<PathBuf>,
 }
 
 impl SandboxProfile {
@@ -87,6 +90,7 @@ impl SandboxProfile {
             disk_quota_mb: None,
             env: HashMap::new(),
             extra_writable_paths: vec![],
+            extra_exec_paths: vec![],
         }
     }
 
@@ -120,6 +124,7 @@ impl SandboxProfile {
             disk_quota_mb: None,
             env: HashMap::new(),
             extra_writable_paths: vec![],
+            extra_exec_paths: vec![],
         }
     }
 
@@ -153,6 +158,7 @@ impl SandboxProfile {
             disk_quota_mb: None,
             env: HashMap::new(),
             extra_writable_paths: vec![],
+            extra_exec_paths: vec![],
         }
     }
 
@@ -173,12 +179,35 @@ impl SandboxProfile {
         let sentinel = std::env::var("FIXUS_GIT_SENTINEL")
             .ok()
             .filter(|s| !s.trim().is_empty());
-        Self::git_inner(&host, port, ca_pem.as_deref(), sentinel.as_deref())
+        let helper_dir = std::env::var("FIXUS_GIT_HELPER_DIR").ok();
+        let mut p = Self::git_inner(
+            &host,
+            port,
+            ca_pem.as_deref(),
+            sentinel.as_deref(),
+            helper_dir.as_deref(),
+        );
+        // cr-12: operator 可经 FIXUS_GIT_NPROC 覆盖 nproc。RLIMIT_NPROC 计的是 real-UID 全机
+        // 进程/线程数(非子树),默认 256 在共享 uid 宿主(同 uid 跑 broker/tools-bank/sandbox-
+        // server 等多进程)上会立刻撑爆,牢内 git fork(EAGAIN)整个废掉。生产单租户硬化 uid
+        // 下默认 256 仍合身;共享/builder 宿主 operator 显式抬升。env 缺/非法 → 保留默认。
+        if let Ok(v) = std::env::var("FIXUS_GIT_NPROC") {
+            if let Ok(n) = v.trim().parse::<u64>() {
+                p.rlimit.nproc = Some(n);
+            }
+        }
+        p
     }
 
     /// cr-12: git profile 构造(纯函数,无 env 读取)。把 host/port/CA 作为显式入参,
     /// 使行为可并行单测(避免进程级 env 在并行测试下竞态)。env → 入参胶水在 [`SandboxProfile::git`]。
-    fn git_inner(host: &str, port: u16, ca_pem: Option<&str>, sentinel: Option<&str>) -> Self {
+    fn git_inner(
+        host: &str,
+        port: u16,
+        ca_pem: Option<&str>,
+        sentinel: Option<&str>,
+        helper_dir: Option<&str>,
+    ) -> Self {
         let mut p = Self::shell();
         p.name = "git".into();
         p.rlimit = RlimitConfig::new()
@@ -203,6 +232,15 @@ impl SandboxProfile {
         // 非密可公开;真 token 只在牢外 swap-proxy 进程内。与 CA 同走 env 接丝。
         if let Some(s) = sentinel {
             p.env.insert("FIXUS_GIT_SENTINEL".to_string(), s.to_string());
+        }
+        // cr-12: helper(git-remote-fixus)必须对牢内 git 可见。jail PATH 默认 /usr/bin:/bin
+        // (env.rs stage 1);profile.env(stage 2)可覆盖 PATH。operator 经 FIXUS_GIT_HELPER_DIR
+        // 指向含 git-remote-fixus 的目录,profile 把它前置到 jail PATH。
+        if let Some(dir) = helper_dir.filter(|s| !s.trim().is_empty()) {
+            p.env.insert("PATH".to_string(), format!("{dir}:/usr/bin:/bin"));
+            // landlock:git exec helper 需 ReadExecute(system_exec_paths 只放 /bin、/usr/bin,
+            // helper 不在其中)。extra_exec_paths 在 process.rs 编译为 landlock ReadExecute。
+            p.extra_exec_paths.push(PathBuf::from(dir));
         }
         // cr-12: git 以 O_RDWR 打开 /dev/null(plumbing / 默认空对象),而 landlock
         // device_paths() 只授 /dev/null ReadOnly → 拒写 → "could not open '/dev/null'
@@ -333,7 +371,7 @@ mod tests {
     fn git_profile_injects_ca_pem_when_provided() {
         // 纯 seam:行为可并行测,不碰进程 env。
         let pem = "-----BEGIN CERTIFICATE-----\nMIIBmockPEM\n-----END CERTIFICATE-----\n";
-        let g = SandboxProfile::git_inner("github.com", 443, Some(pem), None);
+        let g = SandboxProfile::git_inner("github.com", 443, Some(pem), None, None);
         assert_eq!(
             g.env.get("SANDBOX_CA_PEM").map(String::as_str),
             Some(pem),
@@ -343,14 +381,14 @@ mod tests {
 
     #[test]
     fn git_profile_no_ca_when_absent() {
-        let g = SandboxProfile::git_inner("github.com", 443, None, None);
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, None);
         assert!(!g.env.contains_key("SANDBOX_CA_PEM"), "no CA → no injection");
     }
 
     #[test]
     fn git_profile_injects_sentinel_when_provided() {
         // 纯 seam:sentinel 走 profile.env,与 SANDBOX_CA_PEM 同接缝。
-        let g = SandboxProfile::git_inner("github.com", 443, None, Some("sentinel-XYZ"));
+        let g = SandboxProfile::git_inner("github.com", 443, None, Some("sentinel-XYZ"), None);
         assert_eq!(
             g.env.get("FIXUS_GIT_SENTINEL").map(String::as_str),
             Some("sentinel-XYZ"),
@@ -360,7 +398,7 @@ mod tests {
 
     #[test]
     fn git_profile_no_sentinel_when_absent() {
-        let g = SandboxProfile::git_inner("github.com", 443, None, None);
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, None);
         assert!(!g.env.contains_key("FIXUS_GIT_SENTINEL"), "no sentinel → no injection");
     }
 
@@ -433,13 +471,13 @@ mod tests {
     #[test]
     fn git_profile_egress_port_overridable() {
         // 纯 seam:port 落 allowlist。
-        let g = SandboxProfile::git_inner("github.com", 8443, None, None);
+        let g = SandboxProfile::git_inner("github.com", 8443, None, None, None);
         assert_eq!(
             g.egress_allowlist[0].port,
             Some(8443),
             "explicit port lands in allowlist"
         );
-        let g = SandboxProfile::git_inner("github.com", 443, None, None);
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, None);
         assert_eq!(g.egress_allowlist[0].port, Some(443), "default port 443");
     }
 
@@ -456,5 +494,69 @@ mod tests {
         let g = SandboxProfile::git();
         std::env::remove_var("FIXUS_GIT_EGRESS_PORT");
         assert_eq!(g.egress_allowlist[0].port, Some(443), "invalid -> fallback 443");
+    }
+
+    #[test]
+    fn git_profile_helper_dir_prepends_path() {
+        // 纯 seam:helper_dir 前置到 jail PATH(牢内 git 据此找 git-remote-fixus)。
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, Some("/opt/fixus/bin"));
+        assert_eq!(
+            g.env.get("PATH").map(String::as_str),
+            Some("/opt/fixus/bin:/usr/bin:/bin"),
+            "helper_dir prepended to jail PATH"
+        );
+    }
+
+    #[test]
+    fn git_profile_no_helper_dir_no_path_override() {
+        // 无 helper_dir → 不动 PATH(保留 env.rs stage-1 默认 /usr/bin:/bin)。
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, None);
+        assert!(
+            !g.env.contains_key("PATH"),
+            "no helper_dir → no PATH override (env.rs default holds)"
+        );
+    }
+
+    #[test]
+    fn git_profile_blank_helper_dir_no_path_override() {
+        // 空 helper_dir → 视同未设(防 operator 误传空白)。
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, Some("   "));
+        assert!(
+            !g.env.contains_key("PATH"),
+            "blank helper_dir → no PATH override"
+        );
+    }
+
+    #[test]
+    fn git_profile_helper_dir_grants_exec_path() {
+        // helper_dir 同时落 landlock ReadExecute(git exec helper 需要;system_exec_paths
+        // 只放 /bin、/usr/bin)。
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, Some("/opt/fixus/bin"));
+        assert_eq!(
+            g.extra_exec_paths,
+            vec![std::path::PathBuf::from("/opt/fixus/bin")],
+            "helper_dir → extra_exec_paths(landlock ReadExecute)"
+        );
+        let g = SandboxProfile::git_inner("github.com", 443, None, None, None);
+        assert!(
+            g.extra_exec_paths.is_empty(),
+            "no helper_dir → no exec paths"
+        );
+    }
+
+    #[test]
+    fn git_reads_fixus_git_nproc_env_override() {
+        // env → nproc 覆盖胶水冒烟;mutex 序列化(与其它 FIXUS_GIT_* env 测试互斥)。
+        let _g = lock_git_env();
+        std::env::set_var("FIXUS_GIT_NPROC", "4096");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_NPROC");
+        assert_eq!(g.rlimit.nproc, Some(4096), "valid FIXUS_GIT_NPROC override");
+
+        // 非法值 → 保留 git_inner 默认(256)。
+        std::env::set_var("FIXUS_GIT_NPROC", "not-a-number");
+        let g = SandboxProfile::git();
+        std::env::remove_var("FIXUS_GIT_NPROC");
+        assert_eq!(g.rlimit.nproc, Some(256), "invalid FIXUS_GIT_NPROC → keep default 256");
     }
 }

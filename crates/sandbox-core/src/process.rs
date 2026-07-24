@@ -89,6 +89,10 @@ impl PreparedSandboxContext {
                     for path in &profile.extra_writable_paths {
                         policy = policy.add_rule(path, sandbox_landlock::AccessFs::ReadWrite);
                     }
+                    // cr-12: 额外可执行路径(operator-supplied helper 等,landlock ReadExecute)
+                    for path in &profile.extra_exec_paths {
+                        policy = policy.add_rule(path, sandbox_landlock::AccessFs::ReadExecute);
+                    }
 
                     let prepared = sandbox_landlock::PreparedRuleset::prepare(
                         &policy,
